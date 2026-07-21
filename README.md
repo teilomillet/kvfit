@@ -22,6 +22,7 @@ that keeps static estimates separate from measured runtime evidence.
 [Install](#install) · [Quick start](#quick-start) ·
 [Target-host calibration](#calibrate-on-the-target-serving-host) ·
 [Engine checks](#check-the-installed-serving-engine) ·
+[DSpark detection](#deepseek-v4-dspark-detection) ·
 [DGX Spark accuracy](https://github.com/teilomillet/kvfit/blob/main/docs/dgx-spark.md) ·
 [Supported architectures](#what-is-supported-now) ·
 [Compare similar tools](#how-kvfit-differs-from-similar-tools) ·
@@ -131,6 +132,48 @@ Use `--list-hardware` to see built-in presets; `--hardware custom:96` handles an
 accelerator with 96 GiB. Contexts beyond the checkpoint's declared maximum are
 rejected unless you add `--allow-context-overflow`, which labels the result as
 hypothetical.
+
+### DeepSeek V4 DSpark detection
+
+Integrated DeepSeek V4 DSpark checkpoints are detected from their checked
+`dspark_*` config fields and post-model cache schedule, not from a repository
+name. No extra flag is required:
+
+```bash
+uvx kvfit deepseek-ai/DeepSeek-V4-Flash-DSpark \
+  --system dgx-spark \
+  --nodes 2 \
+  --tp 2 \
+  --context 1m \
+  --json
+```
+
+The detector is regression-checked against two differently sized official
+configs: [DeepSeek-V4-Flash-DSpark at `62af8ff`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-DSpark/blob/62af8fffb2f7030cac4de2f0169f5b8d1101b646/config.json)
+and [DeepSeek-V4-Pro-DSpark at `7c09739`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-DSpark/blob/7c09739fd136abfb70a49ec334157f65f45b52cd/config.json).
+Both reports identify integrated `dspark`, record three draft layers, and add a
+`dspark-draft-kv` component:
+
+```text
+3 draft layers × min(context, 128) entries × 512 shared K=V width × KV bytes
+```
+
+At 1M context with BF16 cache values, that component is 393,216 bytes
+(0.000366 GiB) per active sequence and rank. The target model's logical state is
+unchanged; the draft state is additional and replicated because the checked
+DeepSeek layout has one shared K=V head. Repository artifact accounting already
+includes the integrated draft weights.
+
+This is not a complete DSpark runtime-memory or speed prediction. vLLM also
+allocates hidden-state buffers, CUDA graphs, allocator workspace, and other
+engine state based on serving settings. `kvfit` reports those as unmodelled and
+leaves acceptance, latency, and throughput to `kvfit calibrate`. A checkpoint
+can declare DSpark even when a particular launch does not enable it; the static
+planner conservatively includes its declared draft cache. JSON therefore labels
+the declaration source as `model-config` and leaves `runtime_enabled` as `null`.
+Standalone DSpark
+speculator repositories still require their target model and are not inferred
+as standalone serving targets.
 
 For complete DGX systems, specify systems rather than manually multiplying GPU
 counts. This preserves the scale-up boundary and reports a static counted-state
@@ -431,7 +474,8 @@ uv run kvfit \
 - DeepSeek V2/V3 MLA.
 - DeepSeek V3.2 DSA: MLA plus Lightning Indexer state.
 - DeepSeek V4: shared K=V, local sliding state, C4 compressed sparse state,
-  C128 heavily compressed state, and the C4 indexer.
+  C128 heavily compressed state, and the C4 indexer. Checked integrated DSpark
+  configs add their sliding-window draft KV state automatically.
 - GPT-OSS 20B and 120B: checked alternating 128-token sliding/full GQA schedule.
 - Thinking Machines Inkling BF16 and NVFP4: 11 full-attention layers, 55
   512-token sliding layers, and all four short-convolution history streams.
@@ -504,6 +548,8 @@ warning.
 - [Hugging Face cache documentation](https://huggingface.co/docs/transformers/kv_cache)
 - [Hugging Face DeepSeek V4 architecture](https://github.com/huggingface/transformers/blob/main/docs/source/en/model_doc/deepseek_v4.md)
 - [vLLM DeepSeek V4 cache arithmetic](https://vllm.ai/blog/2026/04/24/deepseek-v4.html#the-math-behind-deepseek-v4s-attention-mechanism)
+- [Pinned vLLM DeepSeek V4 DSpark cache implementation](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/models/deepseek_v4/nvidia/dspark.py)
+- [DeepSeek V4 Flash DSpark checkpoint](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-DSpark)
 - [OpenAI GPT-OSS reference implementation](https://github.com/openai/gpt-oss/blob/main/gpt_oss/torch/model.py)
 - [OpenAI GPT-OSS runtime memory guidance](https://developers.openai.com/cookbook/articles/gpt-oss/run-transformers#pick-your-model)
 - [vLLM Inkling architecture and sconv cache design](https://vllm.ai/blog/2026/07/15/inkling)

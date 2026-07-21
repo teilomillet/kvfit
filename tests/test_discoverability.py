@@ -29,6 +29,7 @@ def test_readme_first_screen_exposes_installation_and_retrieval_terms() -> None:
         "vllm",
         "sglang",
         "--json",
+        "dspark detection",
     ):
         assert phrase in first_screen
 
@@ -65,6 +66,9 @@ def test_package_metadata_routes_people_to_public_project_surfaces() -> None:
         "dgx",
         "dgx-spark",
         "gb10",
+        "speculative-decoding",
+        "dspark",
+        "deepseek",
     } <= set(project["keywords"])
 
 
@@ -80,6 +84,8 @@ def test_agent_and_comparison_surfaces_explain_selection_and_evidence_boundaries
         "target-host calibration",
         "static",
         "measured",
+        "deepseek v4 dspark",
+        "draft kv-cache",
     ):
         assert phrase in llms
 
@@ -123,6 +129,9 @@ def test_dgx_spark_accuracy_and_blind_discovery_contract_are_retrievable() -> No
         "resolved commit",
         "not an oom guarantee",
         "discoverability is also tested",
+        "deepseek v4 flash dspark",
+        "dspark-draft-kv",
+        "752a3a504",
     ):
         assert phrase in page
 
@@ -159,6 +168,8 @@ def test_portable_agent_skill_has_search_triggers_and_no_template_placeholders()
         "target-host calibration",
         "--engine-python /path/to/serving-env/bin/python",
         "uvx --from kvfit kvfit-calibrate",
+        "deepseek-v4-flash-dspark",
+        "logical draft kv",
     ):
         assert phrase in skill
 

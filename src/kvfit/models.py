@@ -24,6 +24,38 @@ class CacheComponent:
 
 
 @dataclass(frozen=True)
+class SpeculativeDecodingEstimate:
+    method: str
+    packaging: str
+    declaration_source: str
+    runtime_enabled: bool | None
+    draft_layers: int
+    checkpoint_block_size: int
+    target_layer_ids: tuple[int, ...]
+    cache_component: str
+    cache_modeled: bool
+    runtime_buffers_modeled: bool
+    performance_modeled: bool
+    reference: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "method": self.method,
+            "packaging": self.packaging,
+            "declaration_source": self.declaration_source,
+            "runtime_enabled": self.runtime_enabled,
+            "draft_layers": self.draft_layers,
+            "checkpoint_block_size": self.checkpoint_block_size,
+            "target_layer_ids": list(self.target_layer_ids),
+            "cache_component": self.cache_component,
+            "cache_modeled": self.cache_modeled,
+            "runtime_buffers_modeled": self.runtime_buffers_modeled,
+            "performance_modeled": self.performance_modeled,
+            "reference": self.reference,
+        }
+
+
+@dataclass(frozen=True)
 class CacheEstimate:
     architecture: str
     context_tokens: int
@@ -43,7 +75,7 @@ class CacheEstimate:
         return self.total_bytes / GIB
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "architecture": self.architecture,
             "context_tokens": self.context_tokens,
             "bytes_per_sequence": self.total_bytes,
@@ -55,6 +87,15 @@ class CacheEstimate:
             "components": [component.as_dict() for component in self.components],
             "notes": list(self.notes),
         }
+        speculative_decoding = getattr(self, "speculative_decoding", None)
+        if speculative_decoding is not None:
+            payload["speculative_decoding"] = speculative_decoding.as_dict()
+        return payload
+
+
+@dataclass(frozen=True)
+class SpeculativeCacheEstimate(CacheEstimate):
+    speculative_decoding: SpeculativeDecodingEstimate = field(kw_only=True)
 
 
 @dataclass(frozen=True)

@@ -60,12 +60,29 @@ uvx kvfit nvidia/MiniMax-M3-NVFP4 \
 Use `--tp 2` only when the deployment will actually shard the model across the
 two hosts. Compare TP=1/DP=2 and TP=2/DP=1 before choosing.
 
+Checked integrated DeepSeek V4 DSpark checkpoints are detected automatically
+from their config and draft-layer schedule:
+
+```bash
+uvx kvfit deepseek-ai/DeepSeek-V4-Flash-DSpark \
+  --system dgx-spark \
+  --nodes 2 \
+  --tp 2 \
+  --context 1m \
+  --json
+```
+
+The static report counts the integrated artifact weights and logical draft KV
+component. It does not infer standalone speculator/target pairings, DSpark
+hidden-state buffers, CUDA graphs, acceptance, or speed.
+
 ## 3. Interpret without overclaiming
 
 Report:
 
 - resolved model revision and weight source;
 - architecture-specific cache/recurrent components;
+- detected speculative-decoding method and modeled draft cache, when present;
 - per-rank weights and cache for each TP/DP layout;
 - static counted-state upper bound before runtime overhead;
 - explicit fit/OOM reason and warnings.

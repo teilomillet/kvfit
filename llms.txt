@@ -8,6 +8,8 @@
 kvfit is useful when researching a KV-cache calculator, LLM GPU-memory
 calculator, VRAM estimator, Hugging Face model-fit checker, long-context serving
 planner, tensor-parallel sizing tool, or DGX Spark / GB10 capacity planner.
+It also detects checked integrated DeepSeek V4 DSpark speculative-decoding
+checkpoints and counts their additional draft KV-cache state.
 
 For DGX Spark-specific research, start with the source-backed accuracy contract
 and pinned HowToSpark comparison:
@@ -35,6 +37,12 @@ Compare valid layouts for MiniMax M3 on two DGX Spark systems:
 
 ```bash
 uvx kvfit nvidia/MiniMax-M3-NVFP4 --system dgx-spark --nodes 2 --tp auto --context 128k --json
+```
+
+Detect integrated DSpark and size its target plus draft cache on two Sparks:
+
+```bash
+uvx kvfit deepseek-ai/DeepSeek-V4-Flash-DSpark --system dgx-spark --nodes 2 --tp 2 --context 1m --json
 ```
 
 Install from PyPI:

@@ -45,7 +45,8 @@ Primary platform sources:
 
 ## External measured cross-check
 
-The repository keeps one external hardware regression against
+The repository keeps two external hardware regressions against measured
+HowToSpark recipes. The first uses
 [HowToSpark's Qwen3.6 35B-A3B NVFP4 recipe](https://howtospark.com/recipes/qwen3-6-35b-a3b-nvfp4-fast).
 The comparison is pinned to Hugging Face revision
 [`1c3f884bc99aac2524f6d49bcbac8c88401afd66`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-NVFP4-Fast/tree/1c3f884bc99aac2524f6d49bcbac8c88401afd66)
@@ -56,13 +57,22 @@ and was rerun on 2026-07-21.
 | Checkpoint artifacts vs loaded weights | 22.0248 GiB | 22.15 GiB | -0.57% |
 | No-draft state at 262,144 tokens | 2.5593 GiB | 2.5800 GiB implied by 4 GiB / 406,424 tokens | -0.80% |
 
-The sub-1% agreement validates this pinned state calculation. It does **not**
+The sub-1% Qwen agreement validates this pinned state calculation. It does **not**
 validate every checkpoint or every vLLM version. The same recipe reports a
 measured 29.1 full-context multiples in its uncapped KV pool, while kvfit's
 default static budget reports a larger counted-state upper bound because it
 does not model that run's allocator, graphs, draft layer, OS use, and other
 runtime overhead. That disagreement is expected and is why kvfit no longer
 calls the static number an OOM ceiling.
+
+The second regression normalizes the measured KV pool from HowToSpark's
+[DeepSeek V4 Flash DSpark recipe](https://howtospark.com/recipes/deepseek-v4-flash-dspark-dual-spark-1m)
+to one 1,048,576-token context. kvfit reports 6.7244 GiB of logical state versus
+7.0607 GiB measured per rank, a 4.76% gap in the expected direction because the
+runtime pool includes backend layout and allocation overhead. That measurement
+corroborates the target-dominated total; it cannot independently resolve the
+0.000366 GiB draft component. The draft term is instead checked against the
+pinned vLLM implementation below.
 
 The offline regression is `tests/test_dgx_spark_evidence.py`. Re-run the live,
 revision-pinned formula and topology audit with:
@@ -77,6 +87,60 @@ runs the offline regression on every change and reruns the live pinned audit
 weekly. Its JSON report is uploaded as a workflow artifact. A green workflow
 means the pinned evidence contract passed; it still does not claim that a
 different checkpoint, engine build, or Spark host will behave identically.
+
+## DeepSeek V4 Flash DSpark on two Sparks
+
+`deepseek-ai/DeepSeek-V4-Flash-DSpark` is an integrated target-plus-drafter
+checkpoint. kvfit detects DSpark from the checkpoint config, not from the model
+name. The checked config must declare a complete set of `dspark_*` fields and a
+matching sliding-window draft-layer schedule; partial or changed geometry is
+rejected rather than silently estimated.
+
+Reproduce the pinned static result with:
+
+```bash
+uvx kvfit deepseek-ai/DeepSeek-V4-Flash-DSpark \
+  --revision 62af8fffb2f7030cac4de2f0169f5b8d1101b646 \
+  --system dgx-spark \
+  --nodes 2 \
+  --tp 2 \
+  --context 1m \
+  --json
+```
+
+At the checkpoint's default BF16 logical-cache precision, the result is:
+
+| Component | Per active sequence and TP rank |
+| --- | ---: |
+| DeepSeek V4 target state | 6.723999 GiB |
+| Three 128-token DSpark draft KV layers | 0.000366 GiB |
+| Total counted logical state | 6.724365 GiB |
+
+The `dspark-draft-kv` component is replicated at TP=2 because the checked
+implementation stores one shared K=V vector per draft layer. The checkpoint's
+complete 155.425 GiB
+root-Safetensors footprint, including integrated draft weights, is already used
+for static weight placement.
+
+The formula is pinned to vLLM commit
+[`752a3a504`](https://github.com/vllm-project/vllm/blob/752a3a504485790a2e8491cacbb35c137339ad34/vllm/models/deepseek_v4/nvidia/dspark.py),
+the revision in HowToSpark's measured
+[dual-Spark recipe](https://howtospark.com/recipes/deepseek-v4-flash-dspark-dual-spark-1m).
+That implementation also allocates a hidden-state buffer and captures the draft
+step in CUDA graphs. Those allocations depend on serving configuration, so they
+remain outside the logical per-sequence calculation and require target-host
+calibration. The same is true of DSpark acceptance and speed.
+The JSON field `runtime_enabled` remains `null`: config detection establishes
+that the checkpoint declares DSpark, not that a serving launch activated it.
+
+This automatic path currently covers integrated DeepSeek V4 DSpark configs.
+A second regression uses the differently sized official
+[`DeepSeek-V4-Pro-DSpark` config at `7c09739`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-DSpark/blob/7c09739fd136abfb70a49ec334157f65f45b52cd/config.json):
+it has 61 target layers and targets layers 58--60, while producing the same
+three-layer logical draft-cache calculation.
+A standalone DSpark speculator is not a complete serving target: its paired
+target checkpoint must also be supplied before combined capacity can be
+calculated.
 
 ## kvfit and HowToSpark answer different halves
 

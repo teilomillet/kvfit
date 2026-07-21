@@ -472,6 +472,14 @@ def _human_output(
     revision = metadata.resolved_revision or metadata.requested_revision
     print(f"Model:        {metadata.repo_id}@{revision}")
     print(f"Architecture: {cache.architecture} ({cache.confidence})")
+    speculative = getattr(cache, "speculative_decoding", None)
+    if speculative is not None:
+        print(
+            f"Speculative:  {speculative.method.upper()} ({speculative.packaging}; "
+            "checkpoint-declared, runtime enablement unverified), "
+            f"{speculative.draft_layers} draft layers, "
+            f"checkpoint block {speculative.checkpoint_block_size}; draft KV counted"
+        )
     print(f"Context:      {cache.context_tokens:,} tokens")
     print(f"KV dtype:     {kv_dtype} ({kv_dtype_source}); index dtype: {index_dtype}")
     print(f"KV/sequence:  {cache.total_gib:.2f} GiB logical state")
@@ -532,6 +540,8 @@ def _human_output(
         for warning in warnings:
             print(f"  - {warning}")
     print(f"\nFormula reference: {cache.reference}")
+    if speculative is not None:
+        print(f"Speculative reference: {speculative.reference}")
 
 
 def run(args: argparse.Namespace) -> int:

@@ -6,11 +6,22 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from kvfit.models import CacheComponent, CacheEstimate, UnsupportedArchitecture
+from kvfit.models import (
+    CacheComponent,
+    CacheEstimate,
+    SpeculativeCacheEstimate,
+    SpeculativeDecodingEstimate,
+    UnsupportedArchitecture,
+)
 
 VLLM_DEEPSEEK_V4_REFERENCE = (
     "https://vllm.ai/blog/2026/04/24/deepseek-v4.html#the-math-behind-"
     "deepseek-v4s-attention-mechanism"
+)
+VLLM_DEEPSEEK_V4_DSPARK_REFERENCE = (
+    "https://github.com/vllm-project/vllm/blob/"
+    "752a3a504485790a2e8491cacbb35c137339ad34/"
+    "vllm/models/deepseek_v4/nvidia/dspark.py"
 )
 HF_KV_REFERENCE = "https://huggingface.co/docs/transformers/kv_cache"
 GPT_OSS_REFERENCE = "https://github.com/openai/gpt-oss/blob/main/gpt_oss/torch/model.py"
@@ -125,6 +136,32 @@ def _int(config: Mapping[str, Any], key: str, *, minimum: int = 1) -> int:
     return result
 
 
+def _is_exact_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_exact_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _strict_int(config: Mapping[str, Any], key: str, *, minimum: int = 1) -> int:
+    """Read an integer without accepting lossy numeric coercion."""
+    value = config.get(key)
+    if not _is_exact_integer(value):
+        raise UnsupportedArchitecture(
+            str(config.get("model_type", "unknown")),
+            f"missing or non-integer {key!r}",
+            relevant_fields=(key,),
+        )
+    if value < minimum:
+        raise UnsupportedArchitecture(
+            str(config.get("model_type", "unknown")),
+            f"invalid {key!r}={value!r}",
+            relevant_fields=(key,),
+        )
+    return value
+
+
 def _text_config(raw: Mapping[str, Any]) -> Mapping[str, Any]:
     nested = raw.get("text_config")
     if isinstance(nested, Mapping) and nested.get("num_hidden_layers") is not None:
@@ -205,6 +242,156 @@ def _estimate_deepseek_mla(
         reference=VLLM_DEEPSEEK_V4_REFERENCE,
         notes=tuple(notes),
     )
+
+
+def _deepseek_v4_dspark(
+    config: Mapping[str, Any],
+    *,
+    base_layers: int,
+    post_model_ratios: Sequence[Any],
+    context_tokens: int,
+    window: int,
+    head_dim: int,
+    kv_bytes: float,
+) -> tuple[CacheComponent, SpeculativeDecodingEstimate] | None:
+    required_fields = (
+        "dspark_block_size",
+        "dspark_noise_token_id",
+        "dspark_target_layer_ids",
+        "dspark_markov_rank",
+    )
+    declared_fields = tuple(
+        str(key) for key in config if isinstance(key, str) and key.startswith("dspark_")
+    )
+    if not declared_fields:
+        return None
+    unknown_fields = tuple(sorted(set(declared_fields) - set(required_fields)))
+    if unknown_fields:
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "unverified DSpark configuration fields cannot be sized safely",
+            relevant_fields=tuple(dict.fromkeys((*required_fields, *unknown_fields))),
+        )
+    present_fields = tuple(key for key in required_fields if config.get(key) is not None)
+    missing_fields = tuple(key for key in required_fields if config.get(key) is None)
+    if missing_fields:
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "partial DSpark configuration cannot be sized safely",
+            relevant_fields=tuple(
+                dict.fromkeys((*declared_fields, *present_fields, *missing_fields))
+            ),
+        )
+
+    block_size = _strict_int(config, "dspark_block_size")
+    _strict_int(config, "dspark_noise_token_id", minimum=0)
+    _strict_int(config, "dspark_markov_rank")
+
+    raw_target_ids = config.get("dspark_target_layer_ids")
+    if isinstance(raw_target_ids, (str, bytes)):
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "dspark_target_layer_ids must be an explicit sequence",
+            relevant_fields=("dspark_target_layer_ids",),
+        )
+    if not isinstance(raw_target_ids, Sequence):
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "dspark_target_layer_ids must be an explicit sequence",
+            relevant_fields=("dspark_target_layer_ids",),
+        )
+    if not raw_target_ids:
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "dspark_target_layer_ids must contain integer target-layer indices",
+            relevant_fields=("dspark_target_layer_ids",),
+        )
+    if any(not _is_exact_integer(value) for value in raw_target_ids):
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "dspark_target_layer_ids must contain integer target-layer indices",
+            relevant_fields=("dspark_target_layer_ids",),
+        )
+    target_layer_ids = tuple(int(value) for value in raw_target_ids)
+    if target_layer_ids != tuple(sorted(set(target_layer_ids))) or any(
+        value < 0 or value >= base_layers for value in target_layer_ids
+    ):
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "dspark_target_layer_ids must be strictly increasing base-layer indices",
+            relevant_fields=("dspark_target_layer_ids", "num_hidden_layers"),
+        )
+
+    if not post_model_ratios:
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "DSpark requires one numeric post-model cache entry per draft layer",
+            relevant_fields=("compress_ratios",),
+        )
+    if any(not _is_exact_number(value) for value in post_model_ratios):
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "DSpark requires one numeric post-model cache entry per draft layer",
+            relevant_fields=("compress_ratios",),
+        )
+    if any(value != 0 for value in post_model_ratios):
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "only sliding-window DSpark draft layers are verified",
+            relevant_fields=("compress_ratios", "sliding_window"),
+        )
+
+    declared_layers = config.get("n_mtp_layers")
+    if declared_layers is None:
+        # The pinned DeepSeek-V4 vLLM implementation defaults to three draft
+        # layers when n_mtp_layers is absent. Do not generalize another count.
+        if len(post_model_ratios) != 3:
+            raise UnsupportedArchitecture(
+                "deepseek_v4",
+                "DSpark without n_mtp_layers must match the verified three-layer layout",
+                relevant_fields=("n_mtp_layers", "compress_ratios"),
+            )
+        draft_layers = 3
+    else:
+        draft_layers = _strict_int(config, "n_mtp_layers")
+        if draft_layers != len(post_model_ratios):
+            raise UnsupportedArchitecture(
+                "deepseek_v4",
+                "n_mtp_layers differs from the post-model cache schedule",
+                relevant_fields=("n_mtp_layers", "compress_ratios"),
+            )
+    if len(target_layer_ids) != draft_layers:
+        raise UnsupportedArchitecture(
+            "deepseek_v4",
+            "DSpark target-layer count differs from its draft-layer count",
+            relevant_fields=("dspark_target_layer_ids", "n_mtp_layers", "compress_ratios"),
+        )
+
+    entries = min(context_tokens, window)
+    component = CacheComponent(
+        name="dspark-draft-kv",
+        bytes=draft_layers * entries * head_dim * kv_bytes,
+        detail=(
+            f"{draft_layers} DSpark draft layers × {entries} sliding-window entries × "
+            f"{head_dim} shared K=V width × {kv_bytes:g} bytes"
+        ),
+        tp_parallel_units=1,
+    )
+    speculative = SpeculativeDecodingEstimate(
+        method="dspark",
+        packaging="integrated",
+        declaration_source="model-config",
+        runtime_enabled=None,
+        draft_layers=draft_layers,
+        checkpoint_block_size=block_size,
+        target_layer_ids=target_layer_ids,
+        cache_component=component.name,
+        cache_modeled=True,
+        runtime_buffers_modeled=False,
+        performance_modeled=False,
+        reference=VLLM_DEEPSEEK_V4_DSPARK_REFERENCE,
+    )
+    return component, speculative
 
 
 def _estimate_deepseek_v4(
@@ -321,6 +508,20 @@ def _estimate_deepseek_v4(
             )
         )
 
+    dspark = _deepseek_v4_dspark(
+        config,
+        base_layers=layers,
+        post_model_ratios=raw_ratios[layers:],
+        context_tokens=context_tokens,
+        window=window,
+        head_dim=head_dim,
+        kv_bytes=kv_bytes,
+    )
+    speculative_decoding: SpeculativeDecodingEstimate | None = None
+    if dspark is not None:
+        draft_component, speculative_decoding = dspark
+        components.append(draft_component)
+
     notes = [
         (
             f"Layer schedule: {counts[0]} sliding-only, {csa_layers} C{csa_rate} CSA, "
@@ -331,20 +532,44 @@ def _estimate_deepseek_v4(
             "are runtime overhead."
         ),
     ]
-    if len(raw_ratios) > layers:
+    if speculative_decoding is not None:
+        notes.extend(
+            (
+                (
+                    f"Detected integrated DSpark with {speculative_decoding.draft_layers} "
+                    f"draft layers; their logical sliding-window KV state is counted."
+                ),
+                (
+                    "DSpark runtime speculative-token count, hidden-state buffers, CUDA graphs, "
+                    "allocator workspace, acceptance, and speed remain runtime-only and require "
+                    "target-engine calibration."
+                ),
+            )
+        )
+    elif len(raw_ratios) > layers:
         notes.append(
             f"Ignored {len(raw_ratios) - layers} post-model compression entry/entries, usually MTP."
         )
-    return CacheEstimate(
-        architecture="deepseek-v4-compressed-hybrid",
-        context_tokens=context_tokens,
-        components=tuple(components),
-        kv_parallel_heads=1,
-        query_heads=query_heads,
-        confidence="reference-checked",
-        reference=VLLM_DEEPSEEK_V4_REFERENCE,
-        notes=tuple(notes),
-    )
+    estimate_fields: dict[str, Any] = {
+        "architecture": (
+            "deepseek-v4-compressed-hybrid+dspark"
+            if speculative_decoding is not None
+            else "deepseek-v4-compressed-hybrid"
+        ),
+        "context_tokens": context_tokens,
+        "components": tuple(components),
+        "kv_parallel_heads": 1,
+        "query_heads": query_heads,
+        "confidence": "reference-checked",
+        "reference": VLLM_DEEPSEEK_V4_REFERENCE,
+        "notes": tuple(notes),
+    }
+    if speculative_decoding is not None:
+        return SpeculativeCacheEstimate(
+            **estimate_fields,
+            speculative_decoding=speculative_decoding,
+        )
+    return CacheEstimate(**estimate_fields)
 
 
 def _estimate_standard(
