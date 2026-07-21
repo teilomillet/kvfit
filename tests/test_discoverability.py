@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 
@@ -101,6 +102,48 @@ def test_agent_and_comparison_surfaces_explain_selection_and_evidence_boundaries
         "does not prove",
     ):
         assert phrase in minimax
+
+
+def test_dgx_spark_accuracy_and_blind_discovery_contract_are_retrievable() -> None:
+    page = normalized_text(ROOT / "docs" / "dgx-spark.md")
+    audit = (ROOT / "examples" / "dgx-spark-evidence.toml").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "dgx-spark-evidence.yml").read_text(
+        encoding="utf-8"
+    )
+    discovery = json.loads(
+        (ROOT / "evals" / "dgx-spark-discovery.json").read_text(encoding="utf-8")
+    )
+
+    for phrase in (
+        "dgx spark llm memory calculator",
+        "accuracy contract",
+        "official hardware source",
+        "external measured cross-check",
+        "howtospark",
+        "resolved commit",
+        "not an oom guarantee",
+        "discoverability is also tested",
+    ):
+        assert phrase in page
+
+    assert 'revision = "1c3f884bc99aac2524f6d49bcbac8c88401afd66"' in audit
+    assert 'preset = "dgx-spark"' in audit
+    assert "uv sync --locked" in workflow
+    assert "tests/test_dgx_spark_evidence.py" in workflow
+    assert "kvfit-audit examples/dgx-spark-evidence.toml" in workflow
+    assert "schedule:" in workflow
+    assert discovery["prohibited_query_terms"] == ["kvfit", "teilomillet"]
+    assert len(discovery["queries"]) == 5
+    assert discovery["acceptance"] == {
+        "independent_runs": 3,
+        "different_utc_dates": 3,
+        "minimum_queries_with_organic_hit": 4,
+        "maximum_accepted_rank": 10,
+        "must_distinguish_static_from_measured_runtime": True,
+    }
+    assert discovery["baseline"]["neutral_queries_run"] == 24
+    assert discovery["baseline"]["organic_queries_finding_kvfit"] == 0
+    assert discovery["baseline"]["passed"] is False
 
 
 def test_portable_agent_skill_has_search_triggers_and_no_template_placeholders() -> None:

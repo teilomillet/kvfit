@@ -314,6 +314,20 @@ json = true
     assert payload["concurrency"]["best_scale_up_local"] is not None
 
 
+def test_dgx_spark_warns_that_unified_memory_budget_is_not_measured(monkeypatch, capsys) -> None:
+    metadata = _toml_test_metadata()
+    monkeypatch.setattr("kvfit.cli.fetch_model_metadata", lambda *args, **kwargs: metadata)
+
+    assert main(["owner/model", "--system", "dgx-spark", "--context", "4k", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert any(
+        "unified-memory availability changes with host and swap state" in warning
+        for warning in payload["warnings"]
+    )
+    assert "not an OOM guarantee" in payload["concurrency"]["definition"]
+
+
 def test_system_rejects_manual_gpu_count(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "kvfit.cli.fetch_model_metadata", lambda *args, **kwargs: _toml_test_metadata()

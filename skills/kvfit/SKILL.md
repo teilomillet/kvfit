@@ -67,11 +67,11 @@ Report:
 - resolved model revision and weight source;
 - architecture-specific cache/recurrent components;
 - per-rank weights and cache for each TP/DP layout;
-- memory-only active-sequence ceiling;
+- static counted-state upper bound before runtime overhead;
 - explicit fit/OOM reason and warnings.
 
 Call a static `fits` verdict **memory-only**. It does not prove engine support,
-runtime packing, allocator/workspace headroom, cross-host orchestration,
+runtime packing, allocator/workspace headroom, OOM safety, cross-host orchestration,
 throughput, latency, long-context quality, or stability.
 
 If kvfit rejects an unknown architecture, preserve the failure. Do not replace

@@ -497,7 +497,7 @@ def _human_output(
     if recommended:
         layout = recommended["layout"]
         print(
-            "\nMemory-only concurrent-user ceiling: "
+            "\nStatic counted-state upper bound: "
             f"{recommended['concurrent_users']} users from "
             f"{recommended['active_sequences']} full-context sequences "
             f"({concurrency['active_sequences_per_user']} active sequence(s)/user), "
@@ -506,7 +506,7 @@ def _human_output(
         if layout["cross_domain_tensor_parallel"]:
             print("  Warning: the selected TP layout crosses scale-up domains.")
     else:
-        print("\nMemory-only concurrent-user ceiling: 0 (no full-context layout fits)")
+        print("\nStatic counted-state upper bound: 0 (no full-context layout fits)")
     best_any = concurrency["best_any_fabric"]
     if best_any and recommended and best_any != recommended:
         layout = best_any["layout"]
@@ -520,7 +520,7 @@ def _human_output(
     print("  - Weight shards are ideally balanced across TP ranks.")
     print("  - Each cache component shards only across its own available parallel units.")
     print("  - DP entries are independent full replicas; no expert/pipeline/context parallelism.")
-    print("  - This is memory capacity, not latency- or throughput-qualified concurrency.")
+    print("  - This excludes unmeasured runtime overhead and is not an OOM guarantee or SLO.")
     for note in cache.notes:
         print(f"  - {note}")
     if hardware.note:
@@ -652,6 +652,12 @@ def run(args: argparse.Namespace) -> int:
                 index_dtype=args.index_dtype,
             )
         return engine_exit
+
+    if hardware.unified_memory:
+        warnings.append(
+            "unified-memory availability changes with host and swap state; the selected "
+            "utilization is a static counted-state budget, not measured allocatable memory"
+        )
 
     cache = estimate_cache(
         metadata.config,

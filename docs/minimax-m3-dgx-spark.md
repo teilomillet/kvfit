@@ -35,7 +35,7 @@ For MiniMax M3, kvfit counts:
 - full GQA key/value history;
 - the sparse-attention index-key side cache;
 - per-rank weights and cache under each TP/DP layout;
-- the memory-only active-sequence ceiling and explicit fit/OOM reason.
+- the static counted-state upper bound and explicit fit/OOM reason.
 
 Sparse token selection does not imply that old KV entries are evicted. kvfit
 does not subtract KV history merely because the attention index selects a subset

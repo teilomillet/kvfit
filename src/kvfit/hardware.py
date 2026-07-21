@@ -50,9 +50,9 @@ HARDWARE: dict[str, Hardware] = {
         memory_type="LPDDR5x unified",
         source_url="https://docs.nvidia.com/dgx/dgx-spark/hardware.html",
         note=(
-            "128 GB is unified system memory shared with the OS and applications, and "
-            "DGX OS reserves memory for display; validate the utilization assumption on "
-            "the target machine."
+            "NVIDIA specifies 128 GB of unified system memory shared by CPU, GPU, and other "
+            "engines. Host and swap state change allocatable memory; validate the planning "
+            "budget on the target machine."
         ),
     ),
     "l40s-48": Hardware(

@@ -1,0 +1,48 @@
+name: DGX Spark evidence
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked environment
+        run: uv sync --locked
+      - name: Run offline measured-cache regression
+        run: uv run pytest tests/test_dgx_spark_evidence.py -q
+
+  live-pinned-audit:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked environment
+        run: uv sync --locked
+      - name: Resolve pinned model and run independent oracle
+        run: >-
+          uv run kvfit-audit examples/dgx-spark-evidence.toml
+          --output dgx-spark-evidence.json
+      - name: Upload evidence report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dgx-spark-evidence
+          path: dgx-spark-evidence.json
+          if-no-files-found: error

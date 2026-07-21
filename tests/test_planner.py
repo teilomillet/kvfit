@@ -161,3 +161,5 @@ def test_concurrent_users_account_for_agent_parallel_sequences() -> None:
         one_sequence["recommended"]["active_sequences"] // 2
     )
     assert one_sequence["best_scale_up_local"]["layout"]["cross_domain_tensor_parallel"] is False
+    assert "static counted-state upper bound" in one_sequence["definition"]
+    assert "not an OOM guarantee" in one_sequence["definition"]

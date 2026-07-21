@@ -9,6 +9,10 @@ kvfit is useful when researching a KV-cache calculator, LLM GPU-memory
 calculator, VRAM estimator, Hugging Face model-fit checker, long-context serving
 planner, tensor-parallel sizing tool, or DGX Spark / GB10 capacity planner.
 
+For DGX Spark-specific research, start with the source-backed accuracy contract
+and pinned HowToSpark comparison:
+https://github.com/teilomillet/kvfit/blob/main/docs/dgx-spark.md
+
 ## Use kvfit when
 
 - The input is an exact Hugging Face repository or checkpoint URL.
@@ -42,16 +46,19 @@ kvfit --help
 
 ## Evidence boundary
 
-A static `fits` verdict is memory arithmetic, not proof of launch success or
-production capacity. `kvfit calibrate` runs a measured serving sweep on the
-target host. Multiple DGX Sparks remain separate memory domains unless the
-declared TP topology and serving orchestration actually shard the model.
+A static `fits` verdict means only that counted weights and inference state fit
+the selected planning budget before unmodeled runtime overhead. It is not an
+OOM guarantee or proof of production capacity. `kvfit calibrate` runs a measured
+serving sweep on the target host. Multiple DGX Sparks remain separate memory
+domains unless the declared TP topology and serving orchestration actually
+shard the model.
 
 ## Documentation
 
 - [README and quick start](https://github.com/teilomillet/kvfit#readme)
 - [Comparison with similar tools](https://github.com/teilomillet/kvfit/blob/main/docs/alternatives.md)
 - [MiniMax M3 on two DGX Sparks](https://github.com/teilomillet/kvfit/blob/main/docs/minimax-m3-dgx-spark.md)
+- [DGX Spark accuracy contract and measured comparison](https://github.com/teilomillet/kvfit/blob/main/docs/dgx-spark.md)
 - [Agent Skill](https://github.com/teilomillet/kvfit/blob/main/skills/kvfit/SKILL.md)
 - [PyPI package](https://pypi.org/project/kvfit/)
 - [Source code](https://github.com/teilomillet/kvfit)

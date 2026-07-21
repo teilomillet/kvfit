@@ -22,6 +22,7 @@ that keeps static estimates separate from measured runtime evidence.
 [Install](#install) · [Quick start](#quick-start) ·
 [Target-host calibration](#calibrate-on-the-target-serving-host) ·
 [Engine checks](#check-the-installed-serving-engine) ·
+[DGX Spark accuracy](https://github.com/teilomillet/kvfit/blob/main/docs/dgx-spark.md) ·
 [Supported architectures](#what-is-supported-now) ·
 [Compare similar tools](#how-kvfit-differs-from-similar-tools) ·
 [Method and limits](#what-the-number-means)
@@ -58,7 +59,8 @@ The report gives you:
 - the resolved Hugging Face revision and checkpoint weight footprint;
 - KV or recurrent state per full-context active sequence;
 - per-rank weight and cache costs for each valid TP/DP layout;
-- a memory-only active-sequence ceiling and an explicit fit/OOM reason;
+- a static counted-state upper bound and explicit fit/OOM reason that never
+  masquerade as a runtime guarantee;
 - warnings when runtime packing, cross-node fabric, or engine behavior is still
   unmeasured.
 
@@ -108,6 +110,7 @@ The distinguishing boundary is architecture-specific inference state plus
 explicit topology and target-host qualification. See the
 [source-backed comparison](https://github.com/teilomillet/kvfit/blob/main/docs/alternatives.md)
 or the dedicated
+[DGX Spark LLM memory and accuracy guide](https://github.com/teilomillet/kvfit/blob/main/docs/dgx-spark.md) and
 [MiniMax M3 on two DGX Sparks guide](https://github.com/teilomillet/kvfit/blob/main/docs/minimax-m3-dgx-spark.md).
 
 ### More model and topology examples
@@ -130,8 +133,8 @@ rejected unless you add `--allow-context-overflow`, which labels the result as
 hypothetical.
 
 For complete DGX systems, specify systems rather than manually multiplying GPU
-counts. This preserves the scale-up boundary and reports a memory-only
-concurrent-user ceiling:
+counts. This preserves the scale-up boundary and reports a static counted-state
+upper bound:
 
 ```bash
 uvx kvfit openai/gpt-oss-120b \
@@ -145,8 +148,8 @@ uvx kvfit openai/gpt-oss-120b \
 tokens because suffixes use powers of 1024. One concurrent user means one
 resident full-context sequence by default. Set `--active-sequences-per-user 2`
 for an agent that may keep two branches resident; the reported user count is
-then divided by two. This remains an OOM capacity ceiling, not a throughput or
-latency SLO.
+then divided by two. This remains a static counted-state upper bound, not a
+runtime OOM guarantee or throughput or latency SLO.
 
 Built-in systems include DGX Spark, DGX H100, H200, B200, B300, and the DGX
 GB200 NVL72 rack. `--list-systems` prints their accelerator counts and
@@ -452,7 +455,8 @@ field names while storing very different inference state.
 
 ## What the number means
 
-`kvfit` reports **memory capacity**, not production concurrency. A result of
+`kvfit` reports a **static counted-state upper bound**, not production
+concurrency or a runtime OOM guarantee. A result of
 "four full-context sequences fit" does not promise that four simultaneous
 requests satisfy a latency or throughput objective.
 
@@ -470,7 +474,11 @@ measured on the serving host.
 Expert parallelism, pipeline parallelism, context parallelism, offload, runtime
 allocator page rounding, CUDA graphs, and framework-specific workspaces are not
 silently inferred. The chosen `--utilization` is the explicit budget for those
-unmodeled costs.
+unmodeled costs, but it remains an assumption until checked against target-host
+memory state. This matters especially on DGX Spark, where CPU, GPU, and other
+engines share unified memory and allocatable memory changes with host and swap
+state. See the
+[pinned external DGX Spark validation](https://github.com/teilomillet/kvfit/blob/main/docs/dgx-spark.md#external-measured-cross-check).
 
 The installed-engine preflight is deliberately separate from this topology
 arithmetic. An engine can accept an architecture and quantization while still
@@ -510,6 +518,7 @@ warning.
 - [Transformers Gemma 4 cache geometry](https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma4/modeling_gemma4.py)
 - [vLLM MiniMax M3 indexed cache](https://github.com/vllm-project/vllm/blob/main/vllm/models/minimax_m3/nvidia/model.py)
 - [NVIDIA DGX Spark specifications](https://docs.nvidia.com/dgx/dgx-spark/hardware.html)
+- [NVIDIA DGX Spark unified-memory reporting guidance](https://docs.nvidia.com/dgx/dgx-spark/known-issues.html#guidance-for-reporting-memory-resources-with-unified-memory-architecture)
 - [NVIDIA connecting two DGX Sparks](https://build.nvidia.com/spark/connect-two-sparks)
 - [NVIDIA vLLM on two DGX Sparks](https://build.nvidia.com/spark/vllm/stacked-sparks)
 - [NVIDIA H100 specifications](https://www.nvidia.com/en-us/data-center/h100/)

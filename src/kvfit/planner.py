@@ -137,7 +137,7 @@ def plan_topologies(
             sequences = math.floor(available_for_kv / kv_per_rank) if kv_per_rank else 0
             verdict = "fits" if sequences >= 1 else "context-oom"
             reason = (
-                "at least one full-context sequence fits"
+                "counted weights and full-context state fit before unmodeled runtime overhead"
                 if sequences >= 1
                 else "weights fit, but one full-context cache does not"
             )
@@ -199,7 +199,8 @@ def summarize_concurrency(
         "qualification": "memory-only",
         "definition": (
             "One concurrent user means the configured number of simultaneously resident "
-            "full-context sequences. This is an OOM ceiling, not a throughput or latency SLO."
+            "full-context sequences. This is a static counted-state upper bound before "
+            "runtime overhead, not an OOM guarantee or a throughput or latency SLO."
         ),
         "active_sequences_per_user": active_sequences_per_user,
         "recommended": capacity(recommended),
