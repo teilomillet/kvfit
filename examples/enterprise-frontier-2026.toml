@@ -1,0 +1,262 @@
+# Reproducible representative frontier selected on 2026-07-17 from public,
+# publisher-owned Hugging Face repositories. Equal-weight family coverage is a
+# test denominator, not a claim about market share. The live report records the
+# resolved commit for every repository.
+version = 1
+kv_dtypes = ["auto"]
+gpu_counts = [1, 2, 4, 8]
+utilization = 0.90
+min_model_coverage = 0.80
+min_hardware_coverage = 0.80
+timeout = 45
+
+# Add a local engine environment to turn static memory decisions into live
+# installed-version preflights. Use probe = "load" only on a target GPU host.
+# [[engines]]
+# name = "vllm"
+# python = "../.engine-envs/vllm/bin/python"
+# probe = "config"
+# required = false
+
+[[models]]
+id = "gpt-oss-20b-mxfp4"
+family = "gpt-oss"
+repo = "openai/gpt-oss-20b"
+contexts = ["32k", "128k"]
+expected_architecture = "gpt-oss-alternating-gqa"
+
+[[models]]
+id = "gpt-oss-120b-mxfp4"
+family = "gpt-oss"
+repo = "openai/gpt-oss-120b"
+contexts = ["32k", "128k"]
+expected_architecture = "gpt-oss-alternating-gqa"
+
+[[models]]
+id = "gpt-oss-20b-amd-fp8-kv"
+family = "gpt-oss"
+repo = "amd/gpt-oss-20b-MoE-Quant-W-MXFP4-A-FP8-KV-FP8"
+contexts = ["32k", "128k"]
+expected_architecture = "gpt-oss-alternating-gqa"
+
+[[models]]
+id = "gpt-oss-120b-amd-mxfp4-fp8"
+family = "gpt-oss"
+repo = "amd/gpt-oss-120b-w-mxfp4-a-fp8"
+contexts = ["32k", "128k"]
+expected_architecture = "gpt-oss-alternating-gqa"
+
+[[models]]
+id = "inkling-bf16"
+family = "inkling"
+repo = "thinkingmachines/Inkling"
+contexts = ["128k", "1m"]
+expected_architecture = "inkling-full-sliding-sconv"
+
+[[models]]
+id = "inkling-nvfp4"
+family = "inkling"
+repo = "thinkingmachines/Inkling-NVFP4"
+contexts = ["128k", "1m"]
+expected_architecture = "inkling-full-sliding-sconv"
+
+[[models]]
+id = "deepseek-v4-flash"
+family = "deepseek-v4"
+repo = "deepseek-ai/DeepSeek-V4-Flash"
+contexts = ["128k", "1m"]
+index_dtype = "fp8"
+expected_architecture = "deepseek-v4-compressed-hybrid"
+
+[[models]]
+id = "deepseek-v4-pro"
+family = "deepseek-v4"
+repo = "deepseek-ai/DeepSeek-V4-Pro"
+contexts = ["128k", "1m"]
+index_dtype = "fp8"
+expected_architecture = "deepseek-v4-compressed-hybrid"
+
+[[models]]
+id = "deepseek-v4-flash-nvfp4"
+family = "deepseek-v4"
+repo = "nvidia/DeepSeek-V4-Flash-NVFP4"
+contexts = ["128k", "1m"]
+index_dtype = "fp8"
+expected_architecture = "deepseek-v4-compressed-hybrid"
+
+[[models]]
+id = "glm-5.2-bf16"
+family = "glm-5.2"
+repo = "zai-org/GLM-5.2"
+contexts = ["128k", "1m"]
+index_dtype = "fp8"
+expected_architecture = "glm-dsa-mla"
+
+[[models]]
+id = "glm-5.2-fp8"
+family = "glm-5.2"
+repo = "zai-org/GLM-5.2-FP8"
+contexts = ["128k", "1m"]
+index_dtype = "fp8"
+expected_architecture = "glm-dsa-mla"
+
+[[models]]
+id = "glm-5.2-nvfp4"
+family = "glm-5.2"
+repo = "nvidia/GLM-5.2-NVFP4"
+contexts = ["128k", "1m"]
+index_dtype = "fp8"
+expected_architecture = "glm-dsa-mla"
+
+[[models]]
+id = "qwen3.6-27b-nvfp4"
+family = "qwen3.6"
+repo = "nvidia/Qwen3.6-27B-NVFP4"
+contexts = ["32k", "256k"]
+expected_architecture = "qwen-gated-delta-hybrid"
+
+[[models]]
+id = "qwen3.6-35b-a3b-nvfp4"
+family = "qwen3.6"
+repo = "nvidia/Qwen3.6-35B-A3B-NVFP4"
+contexts = ["32k", "256k"]
+expected_architecture = "qwen-gated-delta-hybrid"
+
+[[models]]
+id = "qwen3-coder-next-bf16"
+family = "qwen3-next"
+repo = "Qwen/Qwen3-Coder-Next"
+contexts = ["32k", "256k"]
+expected_architecture = "qwen-gated-delta-hybrid"
+
+[[models]]
+id = "qwen3-coder-next-fp8"
+family = "qwen3-next"
+repo = "Qwen/Qwen3-Coder-Next-FP8"
+contexts = ["32k", "256k"]
+expected_architecture = "qwen-gated-delta-hybrid"
+
+[[models]]
+id = "gemma4-31b-nvfp4"
+family = "gemma4"
+repo = "nvidia/Gemma-4-31B-IT-NVFP4"
+contexts = ["32k", "256k"]
+expected_architecture = "gemma4-global-sliding-hybrid"
+
+[[models]]
+id = "gemma4-26b-a4b-nvfp4"
+family = "gemma4"
+repo = "nvidia/Gemma-4-26B-A4B-NVFP4"
+contexts = ["32k", "256k"]
+expected_architecture = "gemma4-global-sliding-hybrid"
+
+[[models]]
+id = "nemotron3-super-bf16"
+family = "nemotron3"
+repo = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+contexts = ["128k", "256k"]
+expected_architecture = "nemotron-h-mamba2-attention"
+
+[[models]]
+id = "nemotron3-super-nvfp4"
+family = "nemotron3"
+repo = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+contexts = ["128k", "256k"]
+expected_architecture = "nemotron-h-mamba2-attention"
+
+[[models]]
+id = "kimi-k2.6-nvfp4"
+family = "kimi-k2.6"
+repo = "nvidia/Kimi-K2.6-NVFP4"
+contexts = ["128k", "256k"]
+expected_architecture = "deepseek-mla"
+
+[[models]]
+id = "minimax-m3-nvfp4"
+family = "minimax-m3"
+repo = "nvidia/MiniMax-M3-NVFP4"
+contexts = ["128k", "1m"]
+index_dtype = "fp8"
+expected_architecture = "minimax-m3-sparse-indexed-gqa"
+
+[[models]]
+id = "granite4.1-8b-bf16"
+family = "granite4.1"
+repo = "ibm-granite/granite-4.1-8b"
+contexts = ["32k", "128k"]
+expected_architecture = "standard-gqa-mqa"
+
+[[models]]
+id = "granite4.1-30b-fp8"
+family = "granite4.1"
+repo = "ibm-granite/granite-4.1-30b-fp8"
+contexts = ["32k", "128k"]
+expected_architecture = "standard-gqa-mqa"
+
+[[models]]
+id = "north-mini-code-bf16"
+family = "cohere-north"
+repo = "CohereLabs/North-Mini-Code-1.0"
+contexts = ["128k", "256k"]
+expected_architecture = "standard-full-sliding-hybrid"
+
+[[models]]
+id = "north-mini-code-fp8"
+family = "cohere-north"
+repo = "CohereLabs/North-Mini-Code-1.0-fp8"
+contexts = ["128k", "256k"]
+expected_architecture = "standard-full-sliding-hybrid"
+
+[[models]]
+id = "north-mini-code-w4a16"
+family = "cohere-north"
+repo = "CohereLabs/North-Mini-Code-1.0-w4a16"
+contexts = ["128k", "256k"]
+expected_architecture = "standard-full-sliding-hybrid"
+
+[[models]]
+id = "minicpm5-1b-bf16"
+family = "minicpm5"
+repo = "openbmb/MiniCPM5-1B"
+contexts = ["32k", "128k"]
+expected_architecture = "standard-gqa-mqa"
+
+[[hardware]]
+preset = "dgx-spark"
+gpu_counts = [1, 2]
+
+[[hardware]]
+preset = "l40s-48"
+
+[[hardware]]
+preset = "rtx-pro-6000-96"
+
+[[hardware]]
+preset = "h100-80"
+
+[[hardware]]
+preset = "h100-nvl-94"
+
+[[hardware]]
+preset = "h200-141"
+
+[[hardware]]
+preset = "b200-180"
+
+[[hardware]]
+preset = "gb200-186"
+
+[[hardware]]
+preset = "b300-288"
+
+[[hardware]]
+preset = "mi300x-192"
+
+[[hardware]]
+preset = "mi325x-256"
+
+[[hardware]]
+preset = "mi350x-288"
+
+[[hardware]]
+preset = "mi355x-288"

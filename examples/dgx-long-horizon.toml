@@ -1,0 +1,54 @@
+# Long-horizon memory-capacity matrix. The integer 90000 means exactly 90,000
+# tokens; "128k" uses the CLI's binary suffix and means 131,072 tokens.
+version = 1
+contexts = [90000, "128k"]
+kv_dtypes = ["auto"]
+node_counts = [1, 2, 8]
+active_sequences_per_user = 1
+utilization = 0.90
+min_model_coverage = 1.0
+min_system_coverage = 1.0
+timeout = 45
+
+[[models]]
+id = "gpt-oss-20b"
+family = "gpt-oss"
+repo = "openai/gpt-oss-20b"
+expected_architecture = "gpt-oss-alternating-gqa"
+
+[[models]]
+id = "gpt-oss-120b"
+family = "gpt-oss"
+repo = "openai/gpt-oss-120b"
+expected_architecture = "gpt-oss-alternating-gqa"
+
+[[models]]
+id = "inkling-nvfp4"
+family = "inkling"
+repo = "thinkingmachines/Inkling-NVFP4"
+expected_architecture = "inkling-full-sliding-sconv"
+
+[[models]]
+id = "deepseek-v4-flash"
+family = "deepseek-v4"
+repo = "deepseek-ai/DeepSeek-V4-Flash"
+index_dtype = "fp8"
+expected_architecture = "deepseek-v4-compressed-hybrid"
+
+[[systems]]
+preset = "dgx-spark"
+
+[[systems]]
+preset = "dgx-h100"
+
+[[systems]]
+preset = "dgx-h200"
+
+[[systems]]
+preset = "dgx-b200"
+
+[[systems]]
+preset = "dgx-b300"
+
+[[systems]]
+preset = "dgx-gb200-nvl72"

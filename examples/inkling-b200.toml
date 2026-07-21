@@ -1,0 +1,10 @@
+model = "thinkingmachines/Inkling-NVFP4"
+hardware = "b200-180"
+gpus = 8
+context = "1m"
+kv_dtype = "bf16"
+utilization = 0.90
+tp = 8
+
+[output]
+json = true

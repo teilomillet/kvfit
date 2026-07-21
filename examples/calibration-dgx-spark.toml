@@ -1,0 +1,31 @@
+model = "openai/gpt-oss-120b"
+system = "dgx-spark"
+nodes = 1
+context = 90000
+kv_dtype = "bf16"
+utilization = 0.90
+tp = 1
+active_sequences_per_user = 1
+
+[engine]
+check = "vllm"
+python = "../.engine-envs/vllm/bin/python"
+probe = "config"
+timeout = 300
+require_pass = false
+
+[calibration]
+engine = "vllm"
+mode = "launch"
+python = "../.engine-envs/vllm/bin/python"
+output_tokens = 1
+max_concurrency = 8
+requests_per_concurrency = 1
+startup_timeout = 1800
+request_timeout = 7200
+metrics_interval = 1.0
+stop_on_failure = true
+keep_server = false
+
+[output]
+json = true

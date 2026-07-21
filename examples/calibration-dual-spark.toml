@@ -1,0 +1,32 @@
+model = "openai/gpt-oss-120b"
+system = "dgx-spark"
+nodes = 2
+context = 90000
+kv_dtype = "bf16"
+utilization = 0.90
+tp = 1
+active_sequences_per_user = 2
+
+[engine]
+check = "vllm"
+python = "/opt/vllm/bin/python"
+probe = "config"
+timeout = 300
+require_pass = false
+
+[calibration]
+engine = "vllm"
+mode = "attach"
+base_url = "http://dual-spark-router:8000"
+python = "/opt/vllm/bin/python"
+output_tokens = 1
+max_concurrency = 32
+requests_per_concurrency = 1
+startup_timeout = 60
+request_timeout = 7200
+metrics_interval = 1.0
+max_ttft_ms = 60000
+stop_on_failure = true
+
+[output]
+json = true
