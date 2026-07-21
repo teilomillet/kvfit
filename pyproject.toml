@@ -1,7 +1,7 @@
 [project]
 name = "kvfit"
 version = "0.2.1"
-description = "Check whether a Hugging Face LLM fits a GPU or DGX topology, including weights, KV cache, TP/DP, and target-host calibration"
+description = "Will a Hugging Face LLM fit your GPU or DGX? Plan weights, KV cache or recurrent state, context, TP/DP, and measured calibration"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -17,10 +17,17 @@ keywords = [
   "capacity-planning",
   "model-serving",
   "long-context",
+  "llm-memory-calculator",
+  "gpu-memory-calculator",
+  "model-fit",
+  "inference-memory",
+  "recurrent-state",
   "huggingface",
   "vllm",
   "sglang",
   "dgx",
+  "dgx-spark",
+  "gb10",
   "tensor-parallel",
 ]
 classifiers = [

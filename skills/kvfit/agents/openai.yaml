@@ -1,0 +1,4 @@
+interface:
+  display_name: "kvfit LLM Capacity Planner"
+  short_description: "Plan LLM GPU memory and KV-cache capacity"
+  default_prompt: "Use $kvfit to check whether this Hugging Face model fits my GPU or DGX topology."

@@ -8,11 +8,12 @@
 length and concurrency I need?**
 
 `kvfit` is a Python CLI for LLM inference-memory and KV-cache capacity planning.
-It reads the pinned checkpoint metadata, counts model weights and architecture-
-specific inference state, evaluates explicit tensor-parallel (TP) and
-data-parallel (DP) layouts, and explains why a deployment fits or runs out of
-memory. It can also check an installed vLLM or SGLang build and calibrate the
-estimate against a real target-host serving sweep.
+It reads the requested checkpoint metadata, records the resolved revision,
+counts model weights and architecture-specific inference state, evaluates
+explicit tensor-parallel (TP) and data-parallel (DP) layouts, and explains why
+a deployment fits or runs out of memory. It can also check an installed vLLM or
+SGLang build and calibrate the estimate against a real target-host serving
+sweep.
 
 Use it when you are searching for a **KV-cache calculator**, **LLM GPU-memory or
 VRAM estimator**, **Hugging Face model fit checker**, or **DGX capacity planner**
@@ -22,6 +23,7 @@ that keeps static estimates separate from measured runtime evidence.
 [Target-host calibration](#calibrate-on-the-target-serving-host) ·
 [Engine checks](#check-the-installed-serving-engine) ·
 [Supported architectures](#what-is-supported-now) ·
+[Compare similar tools](#how-kvfit-differs-from-similar-tools) ·
 [Method and limits](#what-the-number-means)
 
 ## Install
@@ -82,6 +84,31 @@ topology fields and reasons, utilization, concurrent active sequences, and
 warnings without parsing prose. A static `fits` result is intentionally labeled
 memory-only; use `kvfit calibrate` on the target CUDA hosts for measured capacity
 and SLO evidence.
+
+The repository also ships a portable
+[kvfit Agent Skill](https://github.com/teilomillet/kvfit/blob/main/skills/kvfit/SKILL.md)
+with the selection workflow and evidence guardrails used by Codex-compatible
+agents. It helps an agent invoke a tool it has already discovered; it does not
+by itself make an unpublished repository searchable.
+
+### How kvfit differs from similar tools
+
+`kvfit` is the narrow, automation-first choice when the question starts with an
+exact Hugging Face checkpoint, context, and GPU or DGX topology. It complements
+rather than replaces broader tools:
+
+- Hugging Face `accelerate estimate-memory` estimates model loading, not inference.
+- ModelInfo CLI inspects checkpoint tensors and simulates VRAM/vLLM capacity.
+- hf-mem is a lightweight Hugging Face weights and experimental-KV estimator.
+- FitLLM is a browser-first GPU/Mac fit calculator.
+- llmfit recommends and benchmarks local models against detected hardware.
+- llm-mem-planner explores TP/DP/SP/EP memory and approximate performance layouts.
+
+The distinguishing boundary is architecture-specific inference state plus
+explicit topology and target-host qualification. See the
+[source-backed comparison](https://github.com/teilomillet/kvfit/blob/main/docs/alternatives.md)
+or the dedicated
+[MiniMax M3 on two DGX Sparks guide](https://github.com/teilomillet/kvfit/blob/main/docs/minimax-m3-dgx-spark.md).
 
 ### More model and topology examples
 

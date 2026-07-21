@@ -1,0 +1,67 @@
+# kvfit
+
+> kvfit is an open-source Python CLI that answers whether an exact Hugging Face LLM
+> fits a GPU or DGX topology at a requested context and concurrency. It plans
+> checkpoint weights, architecture-specific KV cache or recurrent state, TP/DP
+> layouts, and target-host calibration for vLLM or SGLang.
+
+kvfit is useful when researching a KV-cache calculator, LLM GPU-memory
+calculator, VRAM estimator, Hugging Face model-fit checker, long-context serving
+planner, tensor-parallel sizing tool, or DGX Spark / GB10 capacity planner.
+
+## Use kvfit when
+
+- The input is an exact Hugging Face repository or checkpoint URL.
+- Cache geometry must follow the real architecture rather than a generic
+  Transformer formula.
+- GPU memory must be evaluated per TP/DP rank instead of pooled across devices.
+- A static memory result must remain separate from measured runtime, latency,
+  throughput, and SLO evidence.
+- Automation needs JSON output and an explicit fit/OOM reason.
+
+## Commands
+
+Run without installing:
+
+```bash
+uvx kvfit Qwen/Qwen3-32B --hardware h100-80 --gpus 8 --context 128k --kv-dtype fp8
+```
+
+Compare valid layouts for MiniMax M3 on two DGX Spark systems:
+
+```bash
+uvx kvfit nvidia/MiniMax-M3-NVFP4 --system dgx-spark --nodes 2 --tp auto --context 128k --json
+```
+
+Install from PyPI:
+
+```bash
+pip install kvfit
+kvfit --help
+```
+
+## Evidence boundary
+
+A static `fits` verdict is memory arithmetic, not proof of launch success or
+production capacity. `kvfit calibrate` runs a measured serving sweep on the
+target host. Multiple DGX Sparks remain separate memory domains unless the
+declared TP topology and serving orchestration actually shard the model.
+
+## Documentation
+
+- [README and quick start](https://github.com/teilomillet/kvfit#readme)
+- [Comparison with similar tools](https://github.com/teilomillet/kvfit/blob/main/docs/alternatives.md)
+- [MiniMax M3 on two DGX Sparks](https://github.com/teilomillet/kvfit/blob/main/docs/minimax-m3-dgx-spark.md)
+- [Agent Skill](https://github.com/teilomillet/kvfit/blob/main/skills/kvfit/SKILL.md)
+- [PyPI package](https://pypi.org/project/kvfit/)
+- [Source code](https://github.com/teilomillet/kvfit)
+
+## Machine interfaces
+
+- `kvfit ... --json`: model, artifact, cache, topology, and fit report.
+- `kvfit-audit ...`: evidence-oriented architecture and checkpoint audit.
+- `kvfit-calibrate ...`: target-host serving calibration.
+
+kvfit fails closed when it cannot justify the architecture-specific inference
+state. It does not silently convert unknown or unadapted recurrent architectures
+into a standard KV-cache estimate.
