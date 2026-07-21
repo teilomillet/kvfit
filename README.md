@@ -1,31 +1,95 @@
-# kvfit
+# kvfit — LLM KV-cache and GPU memory capacity planner
 
-`kvfit` answers a narrow deployment question before you download or start a model:
+[![PyPI](https://img.shields.io/pypi/v/kvfit)](https://pypi.org/project/kvfit/)
+[![Python](https://img.shields.io/pypi/pyversions/kvfit)](https://pypi.org/project/kvfit/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/teilomillet/kvfit/blob/main/LICENSE)
 
-> Given this exact Hugging Face model revision, context length, cache precision,
-> hardware, and GPU topology, how much logical cache state does one active
-> sequence need, and how many full-context sequences fit in memory?
+**Will this exact Hugging Face model fit my GPU or DGX system at the context
+length and concurrency I need?**
 
-The tool fails closed on cache architectures it does not understand. It does not
-silently apply the standard Transformer KV formula to a new hybrid, recurrent,
-compressed, or sparse-attention model.
+`kvfit` is a Python CLI for LLM inference-memory and KV-cache capacity planning.
+It reads the pinned checkpoint metadata, counts model weights and architecture-
+specific inference state, evaluates explicit tensor-parallel (TP) and
+data-parallel (DP) layouts, and explains why a deployment fits or runs out of
+memory. It can also check an installed vLLM or SGLang build and calibrate the
+estimate against a real target-host serving sweep.
 
-## Start locally
+Use it when you are searching for a **KV-cache calculator**, **LLM GPU-memory or
+VRAM estimator**, **Hugging Face model fit checker**, or **DGX capacity planner**
+that keeps static estimates separate from measured runtime evidence.
+
+[Install](#install) · [Quick start](#quick-start) ·
+[Target-host calibration](#calibrate-on-the-target-serving-host) ·
+[Engine checks](#check-the-installed-serving-engine) ·
+[Supported architectures](#what-is-supported-now) ·
+[Method and limits](#what-the-number-means)
+
+## Install
+
+Run it without modifying a project:
 
 ```bash
-uv sync
-uv run kvfit Qwen/Qwen3-32B \
+uvx kvfit --version
+```
+
+Or install it:
+
+```bash
+pip install kvfit
+kvfit --version
+```
+
+Inside a source checkout, use `uv sync` followed by `uv run kvfit`.
+
+## Quick start
+
+```bash
+uvx kvfit Qwen/Qwen3-32B \
   --hardware h100-80 \
   --gpus 8 \
   --context 128k \
   --kv-dtype fp8
 ```
 
+The report gives you:
+
+- the resolved Hugging Face revision and checkpoint weight footprint;
+- KV or recurrent state per full-context active sequence;
+- per-rank weight and cache costs for each valid TP/DP layout;
+- a memory-only active-sequence ceiling and an explicit fit/OOM reason;
+- warnings when runtime packing, cross-node fabric, or engine behavior is still
+  unmeasured.
+
+`kvfit` fails closed on cache architectures it does not understand. It does not
+silently apply the standard Transformer KV formula to a new hybrid, recurrent,
+compressed, or sparse-attention model.
+
+### For research agents and automation
+
+Use `--json` for a machine-readable report:
+
+```bash
+uvx kvfit nvidia/MiniMax-M3-NVFP4 \
+  --system dgx-spark \
+  --nodes 2 \
+  --tp 2 \
+  --context 128k \
+  --json
+```
+
+An agent can inspect the resolved revision, weight source, cache components,
+topology fields and reasons, utilization, concurrent active sequences, and
+warnings without parsing prose. A static `fits` result is intentionally labeled
+memory-only; use `kvfit calibrate` on the target CUDA hosts for measured capacity
+and SLO evidence.
+
+### More model and topology examples
+
 DeepSeek V4 keeps its sparse indexer at a different precision in common vLLM
 deployments, so state that explicitly:
 
 ```bash
-uv run kvfit https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash \
+uvx kvfit https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash \
   --hardware b200-180 \
   --gpus 4 \
   --context 1m \
@@ -33,17 +97,17 @@ uv run kvfit https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash \
   --index-dtype fp4
 ```
 
-Use `--json` for scripts and agents. Use `--list-hardware` to see built-in
-presets; `--hardware custom:96` handles an accelerator with 96 GiB.
-Contexts beyond the checkpoint's declared maximum are rejected unless you add
-`--allow-context-overflow`, which labels the result as hypothetical.
+Use `--list-hardware` to see built-in presets; `--hardware custom:96` handles an
+accelerator with 96 GiB. Contexts beyond the checkpoint's declared maximum are
+rejected unless you add `--allow-context-overflow`, which labels the result as
+hypothetical.
 
 For complete DGX systems, specify systems rather than manually multiplying GPU
 counts. This preserves the scale-up boundary and reports a memory-only
 concurrent-user ceiling:
 
 ```bash
-uv run kvfit openai/gpt-oss-120b \
+uvx kvfit openai/gpt-oss-120b \
   --system dgx-h100 \
   --nodes 2 \
   --context 90000 \
@@ -150,8 +214,9 @@ managed launch without a CUDA accelerator, records the exact server command,
 waits for readiness, and then runs the engine project's own serving benchmark.
 For each concurrency point, the random workload uses exactly
 `context - output_tokens` input tokens, zero length variation, and the requested
-output length. The report verifies the aggregate input-token count when the
-benchmark exports it.
+output length. A run qualifies only when the benchmark reports an aggregate
+input-token count that matches the requested workload; missing or mismatched
+token evidence fails closed.
 
 The sweep samples `/metrics` concurrently. It understands current and legacy
 vLLM running/waiting/KV-use names plus SGLang's running, queue, and token-use

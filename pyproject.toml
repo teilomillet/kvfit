@@ -1,7 +1,7 @@
 [project]
 name = "kvfit"
-version = "0.2.0"
-description = "Fail-closed KV-cache and inference-memory planning from Hugging Face model metadata"
+version = "0.2.1"
+description = "Check whether a Hugging Face LLM fits a GPU or DGX topology, including weights, KV cache, TP/DP, and target-host calibration"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -9,7 +9,20 @@ license-files = ["LICENSE"]
 authors = [
   { name = "Teïlo Millet" },
 ]
-keywords = ["llm", "kv-cache", "inference", "vllm", "huggingface", "gpu"]
+keywords = [
+  "llm",
+  "kv-cache",
+  "gpu-memory",
+  "vram-calculator",
+  "capacity-planning",
+  "model-serving",
+  "long-context",
+  "huggingface",
+  "vllm",
+  "sglang",
+  "dgx",
+  "tensor-parallel",
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -21,6 +34,12 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/teilomillet/kvfit"
+Documentation = "https://github.com/teilomillet/kvfit#readme"
+Repository = "https://github.com/teilomillet/kvfit.git"
+Issues = "https://github.com/teilomillet/kvfit/issues"
 
 [project.scripts]
 kvfit = "kvfit.cli:main"
