@@ -1,0 +1,28 @@
+{
+  "revision": "20a491d1d311",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/20a491d1d311/python/sglang/srt/mem_cache/kv_cache_configurator.py",
+      "sha256": "0fca89f4912326412ffd773c72f5a12653ffaa00ba8e726183619cfbb4e3b5c2"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/sgl-project/sglang/20a491d1d311/python/sglang/srt/mem_cache/index_key_cache.py",
+      "sha256": "b1e1960c4ce7872538c058be4c3ca31fec320d6410658f462c825d276aac2500"
+    }
+  ],
+  "evidence": "isolated execution of pinned upstream shape functions; no GPU allocation",
+  "mla_bytes_per_layer_token": {
+    "trtllm:fp8": 576,
+    "trtllm:bf16": 1152,
+    "flashmla_sparse_q8:fp8": 656,
+    "flashmla_sparse_q8:bf16": 1152
+  },
+  "index_shape_one_page": [
+    1,
+    8448
+  ],
+  "index_pages_full_shared": [
+    17,
+    0
+  ]
+}
