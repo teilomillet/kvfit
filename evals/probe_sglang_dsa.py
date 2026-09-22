@@ -14,6 +14,8 @@ import json
 import urllib.request
 from types import SimpleNamespace as NS
 
+from probe_sglang_dpa import verify_dpa
+
 REVISION = "20a491d1d311"
 BASE = f"https://raw.githubusercontent.com/sgl-project/sglang/{REVISION}/python/sglang/srt/"
 
@@ -35,6 +37,7 @@ def selected_function(source, name):
 
 
 def main():
+    verify_dpa()  # Also exercised by the existing scheduled source-evidence job.
     paths = ["mem_cache/kv_cache_configurator.py", "mem_cache/index_key_cache.py"]
     sources = {p: urllib.request.urlopen(BASE + p, timeout=30).read() for p in paths}
     namespace = {

@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 
-def main():
+def verify_dpa():
     fixture = json.loads(
         (Path(__file__).resolve().parents[1] / "tests/fixtures/sglang-dpa.json").read_text()
     )
@@ -36,18 +36,13 @@ def main():
     }
     if observed != fixture["world_info"]:
         raise ValueError("upstream attention rank ownership differs from the recorded fixture")
-    print(
-        json.dumps(
-            {
-                "source": url,
-                "sha256": fixture["source_sha256"],
-                "world_info": observed,
-                "qualification": "isolated upstream function; no GPU or engine launch",
-            },
-            indent=2,
-        )
-    )
+    return {
+        "source": url,
+        "sha256": fixture["source_sha256"],
+        "world_info": observed,
+        "qualification": "isolated upstream function; no GPU or engine launch",
+    }
 
 
 if __name__ == "__main__":
-    main()
+    print(json.dumps(verify_dpa(), indent=2))

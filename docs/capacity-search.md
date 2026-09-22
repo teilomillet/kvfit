@@ -101,8 +101,10 @@ unchanged TP, per-rank bottlenecks, expert/head divisibility, changed layer and
 expert counts, BF16/FP8, cache context/dtype changes, malformed or missing metadata,
 revision drift and unsupported architectures. Run `uv run python
 evals/probe_sglang_dpa.py` to recheck the inspected pinned upstream rank function.
-Scheduled CI also rechecks the pinned GLM tensor split. Neither check is GPU
-allocation or performance evidence.
+The existing scheduled source check also runs that DPA function verification.
+The full pinned GLM tensor split was separately checked through the live CLI; it
+is not re-fetched by the scheduled job. Neither check is GPU allocation or
+performance evidence.
 
 Sources: [DPA semantics](https://docs.sglang.io/docs/advanced_features/dp_dpa_smg_guide),
 [GLM recipe](https://docs.sglang.io/cookbook/autoregressive/GLM/GLM-5.3), and

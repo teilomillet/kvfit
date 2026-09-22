@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from kvfit.cli import main
+from kvfit.dpa import DpaWeights
 from kvfit.hardware import Hardware, parse_hardware
 from kvfit.models import GIB, CacheComponent, CacheEstimate, ModelMetadata
 from kvfit.planner import plan_topologies
@@ -268,3 +270,33 @@ def test_fixed_padding_is_charged_once_per_replica():
     )
     assert layouts[0].sequences_per_replica == 4  # 8 - 2 weight - 1 fixed - 1 reserve
     assert layouts[0].total_sequences == 8
+
+
+def test_cli_search_and_toml_use_the_same_profile(monkeypatch, capsys, tmp_path):
+    from kvfit.cli import main
+
+    config = json.loads(
+        (Path(__file__).parent / "fixtures/model_configs/zai-org--GLM-5.3.json").read_text()
+    )["config"]
+    metadata = ModelMetadata("test/glm", "main", "fixed", config, 755632050320, "fixture")
+    calls = []
+    monkeypatch.setattr("kvfit.cli.fetch_model_metadata", lambda *a, **k: metadata)
+    monkeypatch.setattr(
+        "kvfit.cli.fetch_dpa_weights",
+        lambda *a, **k: (
+            calls.append(a) or DpaWeights(734618714112, 20998426304, 256, "observed headers")
+        ),
+    )
+    path = tmp_path / "test.toml"
+    path.write_text(
+        'model="test/glm"\nsystems=["dgx-b300"]\nmax_nodes=4\n'
+        'concurrent_users=25\nactive_sequences_per_user=2\ncontext="1m"\n'
+        'kv_dtype="fp8"\ncache_layout="sglang-dsa-scaled"\nmtp=true\n'
+        'parallelism="sglang-dpa"\nruntime_reserve_gib=8\nutilization=0.8\n'
+        "[output]\njson=true\n"
+    )
+    assert main(["--config", str(path)]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["search"]["minimums"][0]["nodes"] == 4
+    assert output["weight_placement"]["routed_expert_bytes"] == 734618714112
+    assert len(calls) == 1
