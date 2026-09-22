@@ -1,0 +1,69 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version already present on main, for example 0.2.5
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-publication
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Verify requested version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          with open('pyproject.toml', 'rb') as handle:
+              version = tomllib.load(handle)['project']['version']
+          assert version == os.environ['RELEASE_VERSION'], 'Version mismatch'
+          PY
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - run: uv build
+      - name: Install the wheel as an end user
+        run: |
+          uv init --bare /tmp/kvfit-wheel-smoke
+          uv add --project /tmp/kvfit-wheel-smoke "$GITHUB_WORKSPACE"/dist/*.whl
+          cd /tmp/kvfit-wheel-smoke
+          uv run kvfit --version
+          uv run kvfit --help
+          uv run kvfit --list-systems --json
+          uv run --with pytest pytest -o addopts='' -q \
+            "$GITHUB_WORKSPACE/tests/test_capacity_search.py" \
+            "$GITHUB_WORKSPACE/tests/test_sglang_layout.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist
+      - name: Publish validated distributions
+        uses: pypa/gh-action-pypi-publish@release/v1

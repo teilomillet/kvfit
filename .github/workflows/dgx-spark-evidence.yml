@@ -46,6 +46,10 @@ jobs:
         run: >-
           uv run kvfit-audit examples/dgx-spark-evidence.toml
           --output dgx-spark-evidence.json
+      - name: Recheck pinned upstream storage shapes
+        run: |
+          uv run python evals/probe_sglang_dsa.py > sglang-dsa-storage.json
+          diff -u tests/fixtures/sglang-dsa-storage.json sglang-dsa-storage.json
       - name: Upload evidence report
         uses: actions/upload-artifact@v4
         with:
