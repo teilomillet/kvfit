@@ -19,7 +19,7 @@ Use it when you are searching for a **KV-cache calculator**, **LLM GPU-memory or
 VRAM estimator**, **Hugging Face model fit checker**, or **DGX capacity planner**
 that keeps static estimates separate from measured runtime evidence.
 
-[Install](#install) · [Quick start](#quick-start) ·
+[Install](#install) · [Quick start](#quick-start) · [Copy-paste demo](#copy-paste-demo) ·
 [Target-host calibration](#calibrate-on-the-target-serving-host) ·
 [Engine checks](#check-the-installed-serving-engine) ·
 [DSpark detection](#deepseek-v4-dspark-detection) ·
@@ -30,7 +30,8 @@ that keeps static estimates separate from measured runtime evidence.
 
 ## Install
 
-Add it to a uv project (Python 3.11+):
+Add it to a uv project (Python 3.11+). For a new project, first run
+`uv init --bare kvfit-demo`, then `cd kvfit-demo`:
 
 ```bash
 uv add kvfit
@@ -76,56 +77,66 @@ The report gives you:
 silently apply the standard Transformer KV formula to a new hybrid, recurrent,
 compressed, or sparse-attention model.
 
-### Two commands: find a minimum, inspect a machine
+### Copy-paste demo
 
-Available since **0.2.5**. In a uv project, no repository checkout or demo script
-is needed. First, search the smallest whole-system count **per selected family**
-for a model and concurrent-user target:
+After `uv add kvfit`, run these two commands on your laptop. **No GPU or model
+weights needed**: only public Hugging Face metadata is downloaded. Examples were
+checked with kvfit **0.2.5**; the model revision is pinned for repeatability.
+Upgrade an older installation with `uv add 'kvfit>=0.2.5'`.
+
+**1. How many machines for 25 agents, each with two resident branches at 128k?**
 
 ```bash
-uv run kvfit zai-org/GLM-5.3 \
-  --systems dgx-h200 dgx-b200 dgx-b300 --max-nodes 8 \
-  --concurrent-users 25 --active-sequences-per-user 1 \
+uv run kvfit zai-org/GLM-5.3@aca966e4e02791568aa6a4ced368624b3d897f42 \
+  --systems dgx-h200 dgx-b200 dgx-b300 --max-nodes 32 \
+  --concurrent-users 25 --active-sequences-per-user 2 \
   --context 128k --kv-dtype fp8 \
   --cache-layout sglang-dsa-scaled --mtp \
   --runtime-reserve-gib 8 --utilization 0.8
 ```
 
-Then inspect a fixed machine and its capacity:
+Expected counted minima: **25 H200 nodes, 8 B200 nodes, or 3 B300 nodes**.
+Each node has eight GPUs. These are alternative memory candidates, not a claim
+that all three serving backends are qualified. Say: “25 agents means 50 resident
+branches here; it is not the number of registered users.”
+
+**2. Can one B300 node hold one agent with two full 1M-token branches?**
 
 ```bash
-uv run kvfit zai-org/GLM-5.3 \
-  --system dgx-b300 --nodes 1 --tp auto \
-  --context 128k --kv-dtype fp8 \
+uv run kvfit zai-org/GLM-5.3@aca966e4e02791568aa6a4ced368624b3d897f42 \
+  --system dgx-b300 --nodes 1 --tp 8 \
+  --concurrent-users 1 --active-sequences-per-user 2 \
+  --context 1m --kv-dtype fp8 \
   --cache-layout sglang-dsa-scaled --mtp \
   --runtime-reserve-gib 8 --utilization 0.8
 ```
 
-These commands read public metadata, not model weights. A count of 25 means
-25 simultaneous users, not 100 registered users. Two resident agent branches per
-user require `--active-sequences-per-user 2`. `128k` means 131,072 tokens per
-resident sequence, including retained input and generated output.
+Expected: **two resident sequences, so one such agent**, within the counted
+memory budget. The checkpoint is **703.737 GiB in total**; **87.967 GiB per GPU**
+is its ideal weight share across eight GPUs, not the size of the whole model.
 
-Search resolves the checkpoint once and checks integer system counts from one
-through `--max-nodes`. It selects TP within a declared scale-up domain and full
-DP replicas across systems. It does not search cross-domain TP, partial servers,
-offload, prices, or latency. Add `--json` for components, provenance, all attempted
-layouts and minimum candidates. Exit 0 means at least one candidate; 1 means
-none in scope; 2 means invalid input or unsupported semantics.
+Change one argument and rerun:
 
-The GLM example opts into a **pinned SGLang storage hypothesis**, including
-scales, page rounding, pool padding and optional MTP cache. It does not configure
-SGLang or establish that the selected backend runs on each GPU. The 8 GiB
-reserve is an illustrative allowance per GPU, subtracted *inside* the 80% budget,
-not a measured requirement. Preset memory is nominal; replace it with target-host
-GiB using `--device-memory-gib` (one family per search when overriding).
+| Change | What to show |
+| --- | --- |
+| Command 1: `--context 256k` | The B300 candidate grows from **3 to 5 nodes**. |
+| Command 2: `--concurrent-users 2` | Four branches exceed capacity: **`memory target met: False`**, exit code **1**. |
+| Either command: add `--json` | Get structured results, assumptions and sources. |
 
-For another supported model, change its Hugging Face ID and **remove
-`--cache-layout ... --mtp`** unless a storage profile explicitly supports it.
-The default remains an architecture-specific logical payload estimate.
-Unsupported architectures or physical layouts fail instead of guessing.
-See [capacity search and verification](docs/capacity-search.md) for the arithmetic,
-source evidence, limits, and target-host validation path.
+`128k` = 131,072 tokens and `1m` = 1,048,576, including retained input and generated
+output. The example assumes **80% of nominal memory**, an **8 GiB reserve per
+GPU**, and a specific SGLang cache representation with MTP. These flags describe
+the calculation; they do not configure or launch a serving engine.
+
+**Close with:** “This selects machines to test. It does not measure speed or
+prove an OOM-free deployment.” Prefix sharing, HiCache, mixed context lengths
+and tool-wait histories are not simulated. Search stays within each system's
+NVLink domain and adds full replicas across nodes.
+
+For another model, change the Hugging Face ID and remove
+`--cache-layout sglang-dsa-scaled --mtp`; these are GLM-specific here. Keep the
+other sizing arguments and inspect the new model's own assumptions. Unknown
+architectures fail explicitly. [Calculation details and validation](docs/capacity-search.md).
 
 ### For research agents and automation
 
