@@ -11,6 +11,7 @@ from typing import Any
 from kvfit import __version__
 from kvfit.architectures import estimate_cache
 from kvfit.cache_layout import CACHE_LAYOUTS, apply_cache_layout
+from kvfit.dpa import fetch_dpa_weights
 from kvfit.engines import EngineCheck, EngineName, check_engines
 from kvfit.hardware import HARDWARE, parse_hardware
 from kvfit.hf import HuggingFaceError, fetch_model_metadata
@@ -202,6 +203,12 @@ def _parser(defaults: Mapping[str, Any] | None = None) -> argparse.ArgumentParse
         type=float,
         default=0,
         help="additional per-GPU reserve within the utilization budget",
+    )
+    parser.add_argument(
+        "--parallelism",
+        choices=("tp", "sglang-dpa"),
+        default="tp",
+        help="tp: existing TP replicas; sglang-dpa: also compare qualified local DPA/EP layouts",
     )
     parser.add_argument(
         "--cache-layout",
@@ -471,7 +478,7 @@ def _human_engine_only(
 
 
 def _print_layouts(layouts: Sequence[TopologyEstimate]) -> None:
-    print("\nMemory-capacity layouts (DP means full model replicas; EP is disabled):")
+    print("\nMemory-capacity layouts (DP means full model groups; DPA is separate):")
     print("  TP  DP  weights/rank  KV/sequence/rank  seq/replica  total seq  fabric    verdict")
     for layout in layouts:
         if layout.scale_up_domain_accelerators is None:
@@ -487,6 +494,12 @@ def _print_layouts(layouts: Sequence[TopologyEstimate]) -> None:
             f"{layout.sequences_per_replica:>11}  {layout.total_sequences:>9}  "
             f"{fabric:<8}  {layout.verdict}"
         )
+        if layout.strategy == "sglang-dpa":
+            print(
+                f"      SGLang DPA={layout.attention_data_parallel}, "
+                f"attention TP={layout.attention_tensor_parallel}, EP={layout.expert_parallel}; "
+                f"{layout.sequences_per_attention_replica} sequences/attention group"
+            )
         if layout.verdict != "fits":
             print(f"      {layout.reason}")
 
@@ -575,9 +588,11 @@ def _human_output(
         print(f"Runtime reserve/rank: {layouts[0].runtime_reserve_per_rank_bytes / GIB:.3f} GiB")
     _print_engine_checks(engine_checks)
     print("\nAssumptions:")
-    print("  - Weight shards are ideally balanced across TP ranks.")
+    print("  - TP uses ideal weight shards; DPA distributes experts and replicates other tensors.")
     print("  - Each cache component shards only across its own available parallel units.")
-    print("  - DP entries are independent full replicas; no expert/pipeline/context parallelism.")
+    print(
+        "  - DP entries are independent full model groups; pipeline/context parallelism excluded."
+    )
     print("  - This excludes unmeasured runtime overhead and is not an OOM guarantee or SLO.")
     for note in cache.notes:
         print(f"  - {note}")
@@ -608,7 +623,7 @@ def _human_search(payload):
     print(f"State/sequence: {payload['cache']['gib_per_sequence']:.6f} GiB before TP placement")
     for component in payload["cache"]["components"] + payload["cache"].get("fixed_components", []):
         print(f"  {component['name']}: {component['gib']:.6f} GiB; {component['detail']}")
-    print("Minimum candidates per selected family, whole systems, scale-up-local TP only:")
+    print(f"Search scope: {search['scope']}. Not a global hardware minimum.")
     for row in search["minimums"]:
         capacity = row["capacity"]
         layout = capacity["layout"]
@@ -617,6 +632,12 @@ def _human_search(payload):
             f"TP={layout['tensor_parallel']} DP={layout['data_parallel']}; "
             f"counted ceiling {capacity['concurrent_users']} concurrent users"
         )
+        if layout["strategy"] == "sglang-dpa":
+            print(
+                f"    SGLang DPA={layout['attention_data_parallel']}, "
+                f"attention TP={layout['attention_tensor_parallel']}, "
+                f"EP={layout['expert_parallel']}; DP above means full model groups"
+            )
         print(
             f"    Per rank: weights={layout['weights_per_rank_gib']:.3f} GiB, "
             f"state/sequence={layout['kv_per_sequence_per_rank_gib']:.6f} GiB, "
@@ -646,7 +667,8 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("MODEL is required unless a --list-* option is used")
     selected_engines = _selected_engines(args.check_engine)
     if not (args.hardware or args.system or args.systems) and (
-        args.cache_layout != "logical"
+        args.parallelism != "tp"
+        or args.cache_layout != "logical"
         or args.mtp
         or args.indexer_all_layers
         or args.concurrent_users is not None
@@ -672,6 +694,14 @@ def run(args: argparse.Namespace) -> int:
             raise ValueError(
                 "--device-memory-gib search override requires exactly one system family"
             )
+    if args.parallelism == "sglang-dpa":
+        if args.weight_gib is not None or selected_engines:
+            raise ValueError(
+                "DPA cannot use --weight-gib or a generic engine probe; "
+                "qualify an explicitly configured SGLang deployment"
+            )
+        if args.cache_layout == "logical":
+            raise ValueError("DPA requires a qualified SGLang cache storage profile")
     if args.concurrent_users is not None and args.concurrent_users < 1:
         raise ValueError("--concurrent-users must be positive")
     if not math.isfinite(args.runtime_reserve_gib) or args.runtime_reserve_gib < 0:
@@ -873,6 +903,19 @@ def run(args: argparse.Namespace) -> int:
             "runtime-specific footprint"
         )
 
+    dpa_weights = (
+        fetch_dpa_weights(metadata, timeout=args.timeout)
+        if args.parallelism == "sglang-dpa"
+        else None
+    )
+    if dpa_weights:
+        warnings.extend(dpa_weights.as_dict()["assumptions"])
+    else:
+        warnings.append(
+            "DP-Attention/EP is not searched; for qualified GLM DSA checkpoints, "
+            "compare --parallelism sglang-dpa with a SGLang storage profile"
+        )
+
     if search_targets:
         search = search_systems(
             cache,
@@ -883,8 +926,11 @@ def run(args: argparse.Namespace) -> int:
             active_sequences_per_user=args.active_sequences_per_user,
             utilization=args.utilization,
             runtime_reserve_bytes=args.runtime_reserve_gib * GIB,
+            dpa_weights=dpa_weights,
         )
         payload = {
+            "parallelism": args.parallelism,
+            "weight_placement": dpa_weights.as_dict() if dpa_weights else None,
             "model": metadata.as_dict(),
             "cache": cache.as_dict(),
             "precision": {
@@ -913,6 +959,7 @@ def run(args: argparse.Namespace) -> int:
         tensor_parallel=args.tp,
         scale_up_domain_accelerators=scale_up_domain_accelerators,
         runtime_reserve_bytes=args.runtime_reserve_gib * GIB,
+        dpa_weights=dpa_weights,
     )
     concurrency = summarize_concurrency(
         layouts,
@@ -926,6 +973,8 @@ def run(args: argparse.Namespace) -> int:
         )
     if args.json:
         payload = {
+            "parallelism": args.parallelism,
+            "weight_placement": dpa_weights.as_dict() if dpa_weights else None,
             "cache_layout": args.cache_layout,
             "input_config": args.config,
             "model": metadata.as_dict(),

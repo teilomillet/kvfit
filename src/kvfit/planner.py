@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from kvfit.dpa import DpaWeights
 from kvfit.hardware import Hardware
 from kvfit.models import GIB, CacheEstimate
 from kvfit.systems import System
@@ -25,9 +26,23 @@ class TopologyEstimate:
     cross_domain_tensor_parallel: bool = False
     fixed_cache_per_rank_bytes: float = 0
     runtime_reserve_per_rank_bytes: float = 0
+    strategy: str = "tp"
+    attention_data_parallel: int = 1
+    attention_tensor_parallel: int | None = None
+    expert_parallel: int = 1
+    sequences_per_attention_replica: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "strategy": self.strategy,
+            "attention_data_parallel": self.attention_data_parallel,
+            "attention_tensor_parallel": self.attention_tensor_parallel or self.tensor_parallel,
+            "expert_parallel": self.expert_parallel,
+            "sequences_per_attention_replica": (
+                self.sequences_per_replica
+                if self.sequences_per_attention_replica is None
+                else self.sequences_per_attention_replica
+            ),
             "tensor_parallel": self.tensor_parallel,
             "data_parallel": self.data_parallel,
             "budget_per_rank_gib": self.budget_per_rank_bytes / GIB,
@@ -84,11 +99,12 @@ def plan_topologies(
     tensor_parallel: int | None = None,
     scale_up_domain_accelerators: int | None = None,
     runtime_reserve_bytes: float = 0,
+    dpa_weights: DpaWeights | None = None,
 ) -> tuple[TopologyEstimate, ...]:
     """Plan replicated TP groups using ideal weight sharding.
 
-    Expert parallelism, pipeline parallelism, CPU offload, and context parallelism
-    are intentionally not inferred. Data-parallel groups here are full replicas.
+    Optional qualified DPA adds local attention groups with distributed experts.
+    Data-parallel groups here remain full replicas. No PP/CP/offload is inferred.
     """
     quantities = [
         weight_bytes,
@@ -181,6 +197,58 @@ def plan_topologies(
                 runtime_reserve_per_rank_bytes=runtime_reserve_bytes,
             )
         )
+    if dpa_weights is not None:
+        if cache.architecture != "glm-dsa-mla" or cache.confidence != "upstream-storage-formula":
+            raise ValueError("DPA requires a qualified GLM DSA storage profile")
+        for group in _candidate_tp_sizes(gpus, tensor_parallel, scale_up_domain_accelerators):
+            if scale_up_domain_accelerators and (
+                group > scale_up_domain_accelerators or scale_up_domain_accelerators % group
+            ):
+                continue
+            if dpa_weights.expert_count % group:
+                continue
+            for dpa in (d for d in range(2, group + 1) if group % d == 0):
+                attn_tp = group // dpa
+                if cache.query_heads % attn_tp:
+                    continue
+                weights = dpa_weights.routed_expert_bytes / group + dpa_weights.replicated_bytes
+                state = sum(
+                    c.bytes / min(attn_tp, c.tp_parallel_units or cache.kv_parallel_heads)
+                    for c in cache.components
+                )
+                fixed = sum(
+                    c.bytes / min(attn_tp, c.tp_parallel_units or cache.kv_parallel_heads)
+                    for c in getattr(cache, "fixed_components", ())
+                )
+                available = budget - weights - fixed - runtime_reserve_bytes
+                sequences = max(0, math.floor(available / state)) if state else 0
+                verdict = (
+                    "fits" if sequences else "weights-oom" if weights > budget else "context-oom"
+                )
+                layouts.append(
+                    TopologyEstimate(
+                        tensor_parallel=group,
+                        data_parallel=gpus // group,
+                        budget_per_rank_bytes=budget,
+                        weights_per_rank_bytes=weights,
+                        kv_per_sequence_per_rank_bytes=state,
+                        sequences_per_replica=sequences * dpa,
+                        total_sequences=sequences * dpa * (gpus // group),
+                        verdict=verdict,
+                        reason=(
+                            "SGLang DPA checkpoint-placement envelope; all non-routed tensors "
+                            "replicated; runtime allocations and performance unmeasured"
+                        ),
+                        scale_up_domain_accelerators=scale_up_domain_accelerators,
+                        fixed_cache_per_rank_bytes=fixed,
+                        runtime_reserve_per_rank_bytes=runtime_reserve_bytes,
+                        strategy="sglang-dpa",
+                        attention_data_parallel=dpa,
+                        attention_tensor_parallel=attn_tp,
+                        expert_parallel=group,
+                        sequences_per_attention_replica=sequences,
+                    )
+                )
     return tuple(layouts)
 
 
@@ -243,6 +311,7 @@ def search_systems(
     active_sequences_per_user: int,
     utilization: float,
     runtime_reserve_bytes: float = 0,
+    dpa_weights: DpaWeights | None = None,
 ) -> dict[str, Any]:
     """First sufficient whole-system count per family, with node-local TP only."""
     if max_nodes < 1 or concurrent_users < 1 or active_sequences_per_user < 1:
@@ -258,6 +327,7 @@ def search_systems(
                 utilization=utilization,
                 scale_up_domain_accelerators=system.scale_up_domain_accelerators,
                 runtime_reserve_bytes=runtime_reserve_bytes,
+                dpa_weights=dpa_weights,
             )
             local = summarize_concurrency(
                 layouts,
@@ -280,7 +350,12 @@ def search_systems(
             not_found.append(system.id)
     return {
         "qualification": "memory-only",
-        "scope": "minimum whole-system count per selected family with scale-up-local TP",
+        "scope": (
+            "best whole-system count among evaluated local TP and SGLang DP-Attention/EP layouts"
+            if dpa_weights
+            else "minimum whole-system count per selected family with scale-up-local TP"
+        ),
+        "evaluated_strategies": ["tp", "sglang-dpa"] if dpa_weights else ["tp"],
         "max_nodes": max_nodes,
         "concurrent_users": concurrent_users,
         "active_sequences_per_user": active_sequences_per_user,
@@ -289,8 +364,9 @@ def search_systems(
         "attempts": attempts,
         "not_found": not_found,
         "exclusions": [
+            *([] if dpa_weights else ["DP-Attention and expert parallelism"]),
             "cross-domain TP",
-            "pipeline/expert/context parallelism",
+            "cross-domain EP, pipeline/context parallelism",
             "CPU offload",
             "heterogeneous or partial servers",
             "cost",

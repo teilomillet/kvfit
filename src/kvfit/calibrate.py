@@ -383,6 +383,11 @@ def _command_values(
         "seed": config.seed,
         "tensor_parallel": int(layout["tensor_parallel"]),
         "data_parallel": int(layout["data_parallel"]),
+        "attention_data_parallel": int(layout.get("attention_data_parallel", 1)),
+        "attention_tensor_parallel": int(
+            layout.get("attention_tensor_parallel", layout["tensor_parallel"])
+        ),
+        "expert_parallel": int(layout.get("expert_parallel", 1)),
         "utilization": float(prediction["hardware"]["utilization"]),
         "max_concurrency": config.max_concurrency,
     }
@@ -392,6 +397,11 @@ def _default_server_command(
     config: CalibrationConfig,
     prediction: dict[str, Any],
 ) -> list[str]:
+    if _recommended_layout(prediction).get("strategy") == "sglang-dpa":
+        raise ValueError(
+            "DP-Attention needs an explicit matching calibration.server_command "
+            "or an already configured endpoint; generic TP launch is not DPA"
+        )
     if prediction.get("cache_layout", "logical") != "logical":
         raise ValueError(
             "a storage profile does not configure an engine backend or MTP; "

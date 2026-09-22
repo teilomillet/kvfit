@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from kvfit import __version__
 from kvfit.models import GIB, ModelMetadata
@@ -47,6 +48,76 @@ DTYPE_BYTES = {
 
 class HuggingFaceError(RuntimeError):
     pass
+
+
+class _SafeMetadataRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urlparse(newurl).scheme != "https":
+            raise HuggingFaceError("metadata redirect must remain HTTPS")
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected and urlparse(req.full_url).netloc != urlparse(newurl).netloc:
+            redirected.remove_header("Authorization")
+        return redirected
+
+
+_range_opener = build_opener(_SafeMetadataRedirect())
+MAX_SAFETENSORS_HEADER_BYTES = 8 * 1024**2
+
+
+def _read_safetensors_header(
+    url: str,
+    *,
+    token: str | None,
+    timeout: float,
+) -> tuple[dict[str, Any], int, int]:
+    """Read only bounded metadata ranges; never fall back to a weight download."""
+
+    def read_range(start: int, end: int, part: str) -> tuple[bytes, int]:
+        headers = {"Range": f"bytes={start}-{end}", "User-Agent": USER_AGENT}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        # Distinct URLs avoid CDNs reusing the eight-byte response for the header.
+        request = Request(f"{url}?kvfit_header={part}", headers=headers)
+        try:
+            with _range_opener.open(request, timeout=timeout) as response:
+                match = re.fullmatch(
+                    r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", "")
+                )
+                if response.status != 206 or not match:
+                    raise HuggingFaceError("server did not honor the metadata byte range")
+                first, last, total = map(int, match.groups())
+                if (first, last) != (start, end) or total <= end:
+                    raise HuggingFaceError("incorrect Content-Range in checkpoint metadata")
+                raw = response.read(end - start + 2)
+        except (HTTPError, URLError, TimeoutError, OSError) as error:
+            raise HuggingFaceError(f"failed to read checkpoint header: {error}") from error
+        if len(raw) != end - start + 1:
+            raise HuggingFaceError("truncated or oversized checkpoint header range")
+        return raw, total
+
+    length, total = read_range(0, 7, "length")
+    size = struct.unpack("<Q", length)[0]
+    if not 2 <= size <= MAX_SAFETENSORS_HEADER_BYTES or size + 8 > total:
+        raise HuggingFaceError("invalid or oversized safetensors header")
+    raw, second_total = read_range(8, 7 + size, "json")
+    if total != second_total:
+        raise HuggingFaceError("checkpoint size changed between metadata reads")
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    try:
+        header = json.loads(raw, object_pairs_hook=unique_object)
+    except (ValueError, UnicodeError) as error:
+        raise HuggingFaceError("invalid safetensors JSON header") from error
+    if not isinstance(header, dict):
+        raise HuggingFaceError("safetensors header must be an object")
+    return header, size + 8, total
 
 
 @dataclass(frozen=True)

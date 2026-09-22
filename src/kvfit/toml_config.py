@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT_KEYS = {
+    "parallelism",
     "systems",
     "max_nodes",
     "concurrent_users",
@@ -241,6 +242,11 @@ def load_toml_defaults(value: str | Path) -> tuple[Path, dict[str, Any]]:
     for field in ("mtp", "indexer_all_layers"):
         if field in data:
             defaults[field] = _bool(path, field, data[field])
+    if "parallelism" in data:
+        value = _string(path, "parallelism", data["parallelism"])
+        if value not in {"tp", "sglang-dpa"}:
+            raise _error(path, "parallelism", "must be tp or sglang-dpa")
+        defaults["parallelism"] = value
     if "cache_layout" in data:
         from kvfit.cache_layout import CACHE_LAYOUTS
 

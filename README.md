@@ -10,7 +10,7 @@ length and concurrency I need?**
 `kvfit` is a Python CLI for LLM inference-memory and KV-cache capacity planning.
 It reads the requested checkpoint metadata, records the resolved revision,
 counts model weights and architecture-specific inference state, evaluates
-explicit tensor-parallel (TP) and data-parallel (DP) layouts, and explains why
+explicit tensor-parallel (TP), full-replica DP and opt-in SGLang DPA/EP layouts, and explains why
 a deployment fits or runs out of memory. It can also check an installed vLLM or
 SGLang build and calibrate the estimate against a real target-host serving
 sweep.
@@ -63,7 +63,7 @@ uvx kvfit Qwen/Qwen3-32B \
   --kv-dtype fp8
 ```
 
-The report gives you:
+Add `--json` for structured results. The report gives you:
 
 - the resolved Hugging Face revision and checkpoint weight footprint;
 - KV or recurrent state per full-context active sequence;
@@ -80,63 +80,68 @@ compressed, or sparse-attention model.
 ### Copy-paste demo
 
 After `uv add kvfit`, run these two commands on your laptop. **No GPU or model
-weights needed**: only public Hugging Face metadata is downloaded. Examples were
-checked with kvfit **0.2.5**; the model revision is pinned for repeatability.
-Upgrade an older installation with `uv add 'kvfit>=0.2.5'`.
+weights needed**: only Hugging Face metadata and safetensors headers are read.
+Use **kvfit 0.3.0+** (`uv add 'kvfit>=0.3.0'` to upgrade). The checkpoint is pinned.
+Header verification makes this profile slower than the ordinary metadata-only TP plan.
 
-**1. How many machines for 25 agents, each with two resident branches at 128k?**
+**1. How many machines for 25 agents, each with two resident branches at 1M?**
 
 ```bash
 uv run kvfit zai-org/GLM-5.3@aca966e4e02791568aa6a4ced368624b3d897f42 \
   --systems dgx-h200 dgx-b200 dgx-b300 --max-nodes 32 \
   --concurrent-users 25 --active-sequences-per-user 2 \
-  --context 128k --kv-dtype fp8 \
-  --cache-layout sglang-dsa-scaled --mtp \
+  --context 1m --kv-dtype fp8 \
+  --parallelism sglang-dpa --cache-layout sglang-dsa-scaled --mtp \
   --runtime-reserve-gib 8 --utilization 0.8
 ```
 
-Expected counted minima: **25 H200 nodes, 8 B200 nodes, or 3 B300 nodes**.
-Each node has eight GPUs. These are alternative memory candidates, not a claim
-that all three serving backends are qualified. Say: “25 agents means 50 resident
-branches here; it is not the number of registered users.”
+Expected candidate: **4 B300 nodes (32 GPUs)**, each using **DPA8 / attention TP1 /
+EP8**, with four full model groups. The placement counts up to **64 different
+resident sequences**, covering the requested 50. H200/B200 have no candidate in
+this local search under these settings; that is not model incompatibility.
 
-**2. Can one B300 node hold one agent with two full 1M-token branches?**
+Say: “The same MLA history would be duplicated on eight GPUs in ordinary TP8.
+DPA assigns different histories to attention groups while distributing experts.”
+
+**2. How many such agents fit the counted memory of one eight-GPU B300 node?**
 
 ```bash
 uv run kvfit zai-org/GLM-5.3@aca966e4e02791568aa6a4ced368624b3d897f42 \
   --system dgx-b300 --nodes 1 --tp 8 \
-  --concurrent-users 1 --active-sequences-per-user 2 \
+  --concurrent-users 8 --active-sequences-per-user 2 \
   --context 1m --kv-dtype fp8 \
-  --cache-layout sglang-dsa-scaled --mtp \
+  --parallelism sglang-dpa --cache-layout sglang-dsa-scaled --mtp \
   --runtime-reserve-gib 8 --utilization 0.8
 ```
 
-Expected: **two resident sequences, so one such agent**, within the counted
-memory budget. The checkpoint is **703.737 GiB in total**; **87.967 GiB per GPU**
-is its ideal weight share across eight GPUs, not the size of the whole model.
-
-Change one argument and rerun:
+Expected: **16 different resident sequences**, or eight agents with two branches.
+Per GPU: **105.077 GiB** of checkpoint tensors (experts distributed; all other
+tensors counted replicated), **2 × 53.445 GiB** of sequence state, plus the
+assumed reserve and pool padding, for **219.971 / 230.400 GiB** budgeted.
+The checkpoint remains **703.737 GiB of files in total**, not 105 GiB.
 
 | Change | What to show |
 | --- | --- |
-| Command 1: `--context 256k` | The B300 candidate grows from **3 to 5 nodes**. |
-| Command 2: `--concurrent-users 2` | Four branches exceed capacity: **`memory target met: False`**, exit code **1**. |
-| Either command: add `--json` | Get structured results, assumptions and sources. |
+| Command 1: `--parallelism tp` | The restricted TP search returns **25 B300 nodes**, because caches are duplicated across TP ranks. |
+| Command 1: `--context 128k` | The B300 DPA candidate becomes **1 node** in this memory calculation. |
+| Command 2: `--concurrent-users 9` | Eighteen branches exceed the counted capacity: **`memory target met: False`**, exit code **1**. |
+| Either command: add `--json` | Get the weight evidence, placement, assumptions and exclusions. |
 
-`128k` = 131,072 tokens and `1m` = 1,048,576, including retained input and generated
-output. The example assumes **80% of nominal memory**, an **8 GiB reserve per
-GPU**, and a specific SGLang cache representation with MTP. These flags describe
-the calculation; they do not configure or launch a serving engine.
+`1m` = 1,048,576 tokens **per branch**, including retained input and generated output.
+The examples assume every branch is fully resident, 80% of nominal GPU memory,
+an 8 GiB reserve per GPU and the chosen SGLang cache representation with MTP.
+The cache format must match the deployed backend; this profile is not an engine
+configuration or a statement about the backend's default format.
 
-**Close with:** “This selects machines to test. It does not measure speed or
-prove an OOM-free deployment.” Prefix sharing, HiCache, mixed context lengths
-and tool-wait histories are not simulated. Search stays within each system's
-NVLink domain and adds full replicas across nodes.
+**Close with:** “This selects a placement to test. It does not measure speed or
+prove an OOM-free deployment.” Prefix sharing, HiCache, HiSparse, context/pipeline
+parallelism and cross-node expert groups are not searched. All non-expert tensors
+are deliberately counted replicated; this envelope is not a runtime allocation bound.
 
-For another model, change the Hugging Face ID and remove
-`--cache-layout sglang-dsa-scaled --mtp`; these are GLM-specific here. Keep the
-other sizing arguments and inspect the new model's own assumptions. Unknown
-architectures fail explicitly. [Calculation details and validation](docs/capacity-search.md).
+For another architecture, remove `--parallelism sglang-dpa` and
+`--cache-layout sglang-dsa-scaled --mtp`. DPA currently requires a qualified native
+GLM DSA checkpoint with a complete safetensors index; unsupported metadata fails
+explicitly. [Calculation details and validation](docs/capacity-search.md).
 
 ### For research agents and automation
 
@@ -592,8 +597,11 @@ concurrency or a runtime OOM guarantee. A result of
 "four full-context sequences fit" does not promise that four simultaneous
 requests satisfy a latency or throughput objective.
 
-Multi-GPU estimates currently assume ideal weight sharding inside each
-tensor-parallel group and full model replication across data-parallel groups.
+The default TP profile assumes ideal weight sharding inside each tensor-parallel
+group and full model replication across data-parallel groups. The explicit
+`--parallelism sglang-dpa` profile additionally compares qualified local GLM DSA
+attention groups and expert distribution using checkpoint tensor headers; it
+counts all other tensors replicated and records that placement assumption.
 Cache components shard independently when an architecture has different global
 and local KV-head counts (Inkling uses 8 and 16 respectively). Inkling's sconv
 history stays BF16 even when its attention cache is explicitly sized at a lower

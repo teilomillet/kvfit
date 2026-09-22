@@ -36,3 +36,15 @@ Required challenges:
 
 Initial failing evaluation is recorded before production changes. GPU allocations,
 kernel support, throughput, latency and SLO are outside this offline evidence.
+
+## Observed closure, 2026-09-22
+
+- Initial evaluation failed collection because `kvfit.dpa` did not exist.
+- A later revision-drift challenge produced two failures before the pinned-config
+  consistency check was added; it now passes.
+- 56 DPA/metadata evaluations and 410 total offline tests pass; Ruff passes.
+- The real pinned checkpoint reconciles 141 header payloads with index and root
+  artifact sizes. Native search returns four B300 nodes, DPA8/attention TP1/EP8,
+  64 distinct resident sequences, 105.077182 GiB checkpoint tensors per rank.
+- Pinned upstream rank-function re-execution matches the recorded fixture.
+- No target GPU allocations, engine launch or performance measurements were made.

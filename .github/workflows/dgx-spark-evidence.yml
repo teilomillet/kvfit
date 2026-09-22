@@ -56,3 +56,21 @@ jobs:
           name: dgx-spark-evidence
           path: dgx-spark-evidence.json
           if-no-files-found: error
+      - name: Recheck pinned DPA rank ownership
+        run: uv run python evals/probe_sglang_dpa.py
+      - name: Recheck pinned GLM checkpoint placement
+        run: |
+          uv run kvfit zai-org/GLM-5.3@aca966e4e02791568aa6a4ced368624b3d897f42 \
+            --system dgx-b300 --nodes 4 --tp 8 --context 1m --kv-dtype fp8 \
+            --parallelism sglang-dpa --cache-layout sglang-dsa-scaled --mtp \
+            --concurrent-users 25 --active-sequences-per-user 2 \
+            --runtime-reserve-gib 8 --utilization 0.8 --json > glm-dpa-live.json
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+          observed = json.loads(Path('glm-dpa-live.json').read_text())
+          expected = json.loads(Path('tests/fixtures/sglang-dpa.json').read_text())['weights']
+          for key in ('routed_expert_bytes', 'replicated_bytes', 'expert_count'):
+              assert observed['weight_placement'][key] == expected[key], key
+          assert observed['concurrency']['recommended']['active_sequences'] == 64
+          PY

@@ -42,14 +42,22 @@ uvx kvfit OWNER/MODEL --systems dgx-h200 dgx-b200 dgx-b300 \
   --max-nodes 8 --concurrent-users 25 --context 128k
 ```
 
-Search is limited to whole systems with scale-up-local TP and full DP replicas.
+Default search uses whole systems with scale-up-local TP and full DP replicas.
+For qualified native GLM DSA checkpoints (kvfit >= 0.3.0), compare the explicit
+`--parallelism sglang-dpa` profile with a SGLang storage profile. It reads tensor
+headers and adds local DPA/EP candidates. Distinguish full model groups, attention
+DP/TP and expert ranks in the result. Never divide the cache by DPA while keeping
+an unchanged ideal weight shard. All non-routed tensors are counted replicated;
+this is a checkpoint envelope, not a bound on loaded runtime memory.
+
 Report an empty search as no candidate in scope, not a universal impossibility.
-Use `--device-memory-gib` for explicit target memory and `--runtime-reserve-gib`
-for an allowance inside the utilization budget. Neither is automatically measured.
-GLM DSA storage profiles can additionally count pinned SGLang representations;
-read [their evidence and exclusions](../../docs/capacity-search.md) before applying
-`--cache-layout sglang-dsa-scaled --mtp`. Never apply that profile to another
-architecture or imply that a planning option configures the serving engine.
+Cross-node EP, PP/CP, offload and cache sharing remain unmodeled. Use
+`--device-memory-gib` for explicit target memory and `--runtime-reserve-gib` for
+an allowance inside the utilization budget. Neither is automatically measured.
+Read [the evidence and exclusions](../../docs/capacity-search.md) before applying
+`--cache-layout sglang-dsa-scaled --mtp`. Planning flags do not configure a server;
+DPA calibration needs an explicit matching deployment. Unknown weight or cache
+placement fails closed. Preserve evaluations before adapter changes.
 
 Prefer JSON for agent use:
 
