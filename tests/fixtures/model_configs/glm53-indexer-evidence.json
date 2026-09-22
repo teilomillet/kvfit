@@ -1,0 +1,53 @@
+{
+  "source": "https://huggingface.co/zai-org/GLM-5.3/resolve/aca966e4e02791568aa6a4ced368624b3d897f42/model.safetensors.index.json",
+  "layers_with_indexer_weights": [
+    0,
+    1,
+    2,
+    6,
+    10,
+    14,
+    18,
+    22,
+    26,
+    30,
+    34,
+    38,
+    42,
+    46,
+    50,
+    54,
+    58,
+    62,
+    66,
+    70,
+    74,
+    78
+  ],
+  "target_layers": [
+    0,
+    1,
+    2,
+    6,
+    10,
+    14,
+    18,
+    22,
+    26,
+    30,
+    34,
+    38,
+    42,
+    46,
+    50,
+    54,
+    58,
+    62,
+    66,
+    70,
+    74
+  ],
+  "mtp_layers": [
+    78
+  ]
+}
