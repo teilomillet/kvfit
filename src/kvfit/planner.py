@@ -6,6 +6,7 @@ from typing import Any
 
 from kvfit.hardware import Hardware
 from kvfit.models import GIB, CacheEstimate
+from kvfit.systems import System
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,8 @@ class TopologyEstimate:
     scale_up_domain_accelerators: int | None = None
     tensor_parallel_domains: int = 1
     cross_domain_tensor_parallel: bool = False
+    fixed_cache_per_rank_bytes: float = 0
+    runtime_reserve_per_rank_bytes: float = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -29,11 +32,17 @@ class TopologyEstimate:
             "data_parallel": self.data_parallel,
             "budget_per_rank_gib": self.budget_per_rank_bytes / GIB,
             "weights_per_rank_gib": self.weights_per_rank_bytes / GIB,
-            "kv_per_sequence_per_rank_gib": self.kv_per_sequence_per_rank_bytes / GIB,
+            "kv_per_sequence_per_rank_gib": (
+                self.kv_per_sequence_per_rank_bytes / GIB
+                if math.isfinite(self.kv_per_sequence_per_rank_bytes)
+                else None
+            ),
             "sequences_per_replica": self.sequences_per_replica,
             "total_sequences": self.total_sequences,
             "verdict": self.verdict,
             "reason": self.reason,
+            "fixed_cache_per_rank_gib": self.fixed_cache_per_rank_bytes / GIB,
+            "runtime_reserve_per_rank_gib": self.runtime_reserve_per_rank_bytes / GIB,
             "scale_up_domain_accelerators": self.scale_up_domain_accelerators,
             "tensor_parallel_domains": self.tensor_parallel_domains,
             "cross_domain_tensor_parallel": self.cross_domain_tensor_parallel,
@@ -74,14 +83,23 @@ def plan_topologies(
     utilization: float,
     tensor_parallel: int | None = None,
     scale_up_domain_accelerators: int | None = None,
+    runtime_reserve_bytes: float = 0,
 ) -> tuple[TopologyEstimate, ...]:
     """Plan replicated TP groups using ideal weight sharding.
 
     Expert parallelism, pipeline parallelism, CPU offload, and context parallelism
     are intentionally not inferred. Data-parallel groups here are full replicas.
     """
-    if weight_bytes < 0:
-        raise ValueError("weight_bytes must not be negative")
+    quantities = [
+        weight_bytes,
+        hardware.memory_gib,
+        runtime_reserve_bytes,
+        *(c.bytes for c in (*cache.components, *getattr(cache, "fixed_components", ()))),
+    ]
+    if not all(math.isfinite(value) and value >= 0 for value in quantities):
+        raise ValueError("memory, weights, cache and reserve must be finite and non-negative")
+    if hardware.memory_gib <= 0:
+        raise ValueError("hardware memory must be positive")
     if not 0 < utilization <= 1:
         raise ValueError("utilization must be in (0, 1]")
     if scale_up_domain_accelerators is not None:
@@ -128,18 +146,22 @@ def plan_topologies(
             component.bytes / min(tp, component.tp_parallel_units or cache.kv_parallel_heads)
             for component in cache.components
         )
-        available_for_kv = budget - weights_per_rank
-        if available_for_kv < 0:
+        fixed_per_rank = sum(
+            c.bytes / min(tp, c.tp_parallel_units or cache.kv_parallel_heads)
+            for c in getattr(cache, "fixed_components", ())
+        )
+        available_for_kv = budget - weights_per_rank - fixed_per_rank - runtime_reserve_bytes
+        if weights_per_rank > budget:
             sequences = 0
             verdict = "weights-oom"
             reason = "ideal weight shard exceeds the per-rank planning budget"
         else:
-            sequences = math.floor(available_for_kv / kv_per_rank) if kv_per_rank else 0
+            sequences = max(0, math.floor(available_for_kv / kv_per_rank)) if kv_per_rank else 0
             verdict = "fits" if sequences >= 1 else "context-oom"
             reason = (
                 "counted weights and full-context state fit before unmodeled runtime overhead"
                 if sequences >= 1
-                else "weights fit, but one full-context cache does not"
+                else "weights fit, but cache plus fixed state and runtime reserve exceed budget"
             )
         layouts.append(
             TopologyEstimate(
@@ -155,6 +177,8 @@ def plan_topologies(
                 scale_up_domain_accelerators=scale_up_domain_accelerators,
                 tensor_parallel_domains=domains,
                 cross_domain_tensor_parallel=crosses_domain,
+                fixed_cache_per_rank_bytes=fixed_per_rank,
+                runtime_reserve_per_rank_bytes=runtime_reserve_bytes,
             )
         )
     return tuple(layouts)
@@ -206,4 +230,70 @@ def summarize_concurrency(
         "recommended": capacity(recommended),
         "best_scale_up_local": capacity(best_local),
         "best_any_fabric": capacity(best_any),
+    }
+
+
+def search_systems(
+    cache: CacheEstimate,
+    *,
+    weight_bytes: int,
+    targets: list[tuple[System, Hardware]],
+    max_nodes: int,
+    concurrent_users: int,
+    active_sequences_per_user: int,
+    utilization: float,
+    runtime_reserve_bytes: float = 0,
+) -> dict[str, Any]:
+    """First sufficient whole-system count per family, with node-local TP only."""
+    if max_nodes < 1 or concurrent_users < 1 or active_sequences_per_user < 1:
+        raise ValueError("search horizon and user/sequence counts must be positive")
+    minimums, attempts, not_found = [], [], []
+    for system, hardware in targets:
+        for nodes in range(1, max_nodes + 1):
+            layouts = plan_topologies(
+                cache,
+                weight_bytes=weight_bytes,
+                hardware=hardware,
+                gpus=nodes * system.accelerators_per_system,
+                utilization=utilization,
+                scale_up_domain_accelerators=system.scale_up_domain_accelerators,
+                runtime_reserve_bytes=runtime_reserve_bytes,
+            )
+            local = summarize_concurrency(
+                layouts,
+                active_sequences_per_user=active_sequences_per_user,
+            )["best_scale_up_local"]
+            row = {
+                "system": system.as_dict(),
+                "hardware": hardware.as_dict(),
+                "nodes": nodes,
+                "gpus": nodes * system.accelerators_per_system,
+                "capacity": local,
+                "meets_target": local is not None and local["concurrent_users"] >= concurrent_users,
+                "layouts": [layout.as_dict() for layout in layouts],
+            }
+            attempts.append(row)
+            if row["meets_target"]:
+                minimums.append(row)
+                break
+        else:
+            not_found.append(system.id)
+    return {
+        "qualification": "memory-only",
+        "scope": "minimum whole-system count per selected family with scale-up-local TP",
+        "max_nodes": max_nodes,
+        "concurrent_users": concurrent_users,
+        "active_sequences_per_user": active_sequences_per_user,
+        "resident_sequences": concurrent_users * active_sequences_per_user,
+        "minimums": minimums,
+        "attempts": attempts,
+        "not_found": not_found,
+        "exclusions": [
+            "cross-domain TP",
+            "pipeline/expert/context parallelism",
+            "CPU offload",
+            "heterogeneous or partial servers",
+            "cost",
+            "runtime performance",
+        ],
     }

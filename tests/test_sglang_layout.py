@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
-from kvfit.cache_layout import apply_cache_layout
 
 from kvfit.architectures import estimate_cache
+from kvfit.cache_layout import apply_cache_layout
 from kvfit.models import UnsupportedArchitecture
 
 FIXTURES = Path(__file__).parent / "fixtures" / "model_configs"
@@ -74,3 +74,37 @@ def test_sglang_index_cache_cannot_silently_be_bf16():
     base = estimate_cache(cfg, context_tokens=128, kv_bytes=2)
     with pytest.raises(ValueError, match="index"):
         apply_cache_layout(base, cfg, profile="sglang-dsa-raw", kv_dtype="bf16", index_dtype="bf16")
+
+
+@pytest.mark.parametrize(
+    "profile,backend",
+    [
+        ("sglang-dsa-raw", "trtllm"),
+        ("sglang-dsa-scaled", "flashmla_sparse_q8"),
+    ],
+)
+@pytest.mark.parametrize("dtype,width", [("fp8", 1), ("bf16", 2)])
+def test_adapter_matches_recorded_upstream_function_execution(profile, backend, dtype, width):
+    evidence = json.loads((FIXTURES.parent / "sglang-dsa-storage.json").read_text())
+    cfg = config()
+    base = estimate_cache(cfg, context_tokens=64, kv_bytes=width)
+    result = apply_cache_layout(base, cfg, profile=profile, kv_dtype=dtype)
+    expected_mla = evidence["mla_bytes_per_layer_token"][f"{backend}:{dtype}"] * 78 * 64
+    expected_index = evidence["index_shape_one_page"][1] * 21
+    assert result.components[0].bytes == expected_mla
+    assert result.components[1].bytes == expected_index
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("kv_lora_rank", 256),
+        ("qk_rope_head_dim", 32),
+        ("index_head_dim", 256),
+    ],
+)
+def test_future_storage_dimensions_fail_closed(field, value):
+    cfg = {**config(), field: value}
+    base = estimate_cache(cfg, context_tokens=128, kv_bytes=1)
+    with pytest.raises(UnsupportedArchitecture, match="unverified"):
+        apply_cache_layout(base, cfg, profile="sglang-dsa-scaled", kv_dtype="fp8")

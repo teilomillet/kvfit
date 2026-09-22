@@ -392,6 +392,12 @@ def _default_server_command(
     config: CalibrationConfig,
     prediction: dict[str, Any],
 ) -> list[str]:
+    if prediction.get("cache_layout", "logical") != "logical":
+        raise ValueError(
+            "a storage profile does not configure an engine backend or MTP; "
+            "provide calibration.server_command with matching settings, or attach "
+            "to an explicitly configured server"
+        )
     values = _command_values(config, prediction)
     model, revision, _ = _model_details(prediction)
     nodes = int((prediction.get("system") or {}).get("systems", 1))
@@ -706,7 +712,12 @@ def _load_benchmark_result(path: Path) -> dict[str, Any]:
 def _metric_value(result: dict[str, Any], *names: str) -> float | None:
     for name in names:
         value = result.get(name)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value >= 0
+        ):
             return float(value)
     return None
 
@@ -717,12 +728,12 @@ def _slo_result(config: CalibrationConfig, result: dict[str, Any]) -> dict[str, 
         (
             "ttft_ms",
             config.max_ttft_ms,
-            ("p95_ttft_ms", "p99_ttft_ms", "mean_ttft_ms"),
+            ("p95_ttft_ms", "p99_ttft_ms"),
         ),
         (
             "tpot_ms",
             config.max_tpot_ms,
-            ("p95_tpot_ms", "p99_tpot_ms", "mean_tpot_ms"),
+            ("p95_tpot_ms", "p99_tpot_ms"),
         ),
         (
             "e2e_ms",
@@ -732,8 +743,6 @@ def _slo_result(config: CalibrationConfig, result: dict[str, Any]) -> dict[str, 
                 "p95_e2e_latency_ms",
                 "p99_e2e_latency_ms",
                 "p95_e2e_ms",
-                "mean_e2el_ms",
-                "mean_e2e_latency_ms",
             ),
         ),
     )
@@ -744,10 +753,16 @@ def _slo_result(config: CalibrationConfig, result: dict[str, Any]) -> dict[str, 
         checks[label] = {
             "limit": limit,
             "measured": measured,
-            "source": next((name for name in names if result.get(name) is not None), None),
+            "source": next(
+                (name for name in names if _metric_value(result, name) is not None), None
+            ),
             "passed": measured is not None and measured <= limit,
         }
-    return {"passed": all(value["passed"] for value in checks.values()), "checks": checks}
+    return {
+        "passed": bool(checks) and all(value["passed"] for value in checks.values()),
+        "configured": bool(checks),
+        "checks": checks,
+    }
 
 
 def _run_one(
@@ -820,15 +835,22 @@ def _run_one(
     _, _, context = _model_details(prediction)
     input_tokens = context - config.output_tokens
     exact_tokens_verified = (
-        isinstance(completed, int)
-        and isinstance(exact_input, int)
+        type(completed) is int
+        and type(exact_input) is int
         and exact_input == completed * input_tokens
     )
-    completed_all = isinstance(completed, int) and completed == num_prompts
+    exact_output = raw_result.get("total_output_tokens")
+    exact_output_verified = (
+        type(completed) is int
+        and type(exact_output) is int
+        and exact_output == completed * config.output_tokens
+    )
+    completed_all = type(completed) is int and completed == num_prompts
     success = (
         process.returncode == 0
         and completed_all
         and exact_tokens_verified
+        and exact_output_verified
         and not timed_out
         and not oom_observed
     )
@@ -847,6 +869,7 @@ def _run_one(
         "slo": slo,
         "slo_qualified": success and slo["passed"],
         "exact_input_tokens_verified": exact_tokens_verified,
+        "exact_output_tokens_verified": exact_output_verified,
         "expected_input_tokens_per_request": input_tokens,
         "benchmark": raw_result,
         "metrics": metrics,

@@ -34,6 +34,23 @@ Inside a kvfit source checkout, replace `uvx kvfit` with `uv run kvfit`.
 
 ## 2. Run the static plan
 
+To find minimum whole-system counts per family for a concurrent-user target,
+use native search (kvfit >= 0.2.5):
+
+```bash
+uvx kvfit OWNER/MODEL --systems dgx-h200 dgx-b200 dgx-b300 \
+  --max-nodes 8 --concurrent-users 25 --context 128k
+```
+
+Search is limited to whole systems with scale-up-local TP and full DP replicas.
+Report an empty search as no candidate in scope, not a universal impossibility.
+Use `--device-memory-gib` for explicit target memory and `--runtime-reserve-gib`
+for an allowance inside the utilization budget. Neither is automatically measured.
+GLM DSA storage profiles can additionally count pinned SGLang representations;
+read [their evidence and exclusions](../../docs/capacity-search.md) before applying
+`--cache-layout sglang-dsa-scaled --mtp`. Never apply that profile to another
+architecture or imply that a planning option configures the serving engine.
+
 Prefer JSON for agent use:
 
 ```bash

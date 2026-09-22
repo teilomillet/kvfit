@@ -87,10 +87,18 @@ class CacheEstimate:
             "components": [component.as_dict() for component in self.components],
             "notes": list(self.notes),
         }
+        fixed_components = getattr(self, "fixed_components", None)
+        if fixed_components is not None:
+            payload["fixed_components"] = [component.as_dict() for component in fixed_components]
         speculative_decoding = getattr(self, "speculative_decoding", None)
         if speculative_decoding is not None:
             payload["speculative_decoding"] = speculative_decoding.as_dict()
         return payload
+
+
+@dataclass(frozen=True)
+class StorageCacheEstimate(CacheEstimate):
+    fixed_components: tuple[CacheComponent, ...] = field(kw_only=True)
 
 
 @dataclass(frozen=True)

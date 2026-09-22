@@ -153,3 +153,118 @@ def test_nonfinite_planner_weights_are_rejected(weight):
         plan_topologies(
             cache, weight_bytes=weight, hardware=Hardware("test", "test", 8), gpus=1, utilization=1
         )
+
+
+def test_search_report_is_standard_json_even_for_unsupported_tp(monkeypatch, capsys):
+    monkeypatch.setattr("kvfit.cli.fetch_model_metadata", lambda *a, **k: tiny_metadata())
+    assert (
+        main(
+            [
+                "test/exact",
+                "--systems",
+                "dgx-gb200-nvl72",
+                "--max-nodes",
+                "1",
+                "--concurrent-users",
+                "1",
+                "--context",
+                "128k",
+                "--json",
+            ]
+        )
+        == 0
+    )
+
+    def reject_constant(value):
+        pytest.fail(f"non-standard JSON constant: {value}")
+
+    payload = json.loads(capsys.readouterr().out, parse_constant=reject_constant)
+    unsupported = [
+        row
+        for row in payload["search"]["attempts"][0]["layouts"]
+        if row["verdict"] == "unsupported"
+    ]
+    assert unsupported
+    assert all(row["kv_per_sequence_per_rank_gib"] is None for row in unsupported)
+
+
+def test_search_toml_and_agent_branches(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr("kvfit.cli.fetch_model_metadata", lambda *a, **k: tiny_metadata())
+    path = tmp_path / "search.toml"
+    path.write_text(
+        'model="test/exact"\nsystems=["dgx-h200"]\nmax_nodes=2\n'
+        "concurrent_users=3\nactive_sequences_per_user=2\n"
+        f"context={2**28}\ndevice_memory_gib=5\nruntime_reserve_gib=1\n"
+        'utilization=1.0\ncache_layout="logical"\n[output]\njson=true\n'
+    )
+    assert main([str(path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["search"]["resident_sequences"] == 6
+    # TP4: 2 GiB weights/rank, 2 sequences/replica, 2 replicas/node = 2 users/node.
+    assert payload["search"]["minimums"][0]["nodes"] == 2
+    assert payload["search"]["minimums"][0]["capacity"]["concurrent_users"] == 4
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--cache-layout", "sglang-dsa-raw"],
+        ["--mtp"],
+        ["--concurrent-users", "3"],
+        ["--device-memory-gib", "140"],
+        ["--runtime-reserve-gib", "10"],
+    ],
+)
+def test_planning_options_need_a_hardware_target(monkeypatch, extra):
+    def no_network(*a, **k):
+        pytest.fail("invalid planning options reached network")
+
+    monkeypatch.setattr("kvfit.cli.fetch_model_metadata", no_network)
+    assert main(["test/exact", "--check-engine", "sglang", *extra]) == 2
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("runtime_reserve_gib", "nan"),
+        ("device_memory_gib", "inf"),
+        ("runtime_reserve_gib", "-1"),
+        ("max_nodes", "0"),
+        ("concurrent_users", "true"),
+        ("cache_layout", '"guess"'),
+    ],
+)
+def test_invalid_search_toml_stops_before_network(monkeypatch, tmp_path, field, value):
+    def no_network(*a, **k):
+        pytest.fail("invalid config reached network")
+
+    monkeypatch.setattr("kvfit.cli.fetch_model_metadata", no_network)
+    path = tmp_path / "invalid.toml"
+    path.write_text(f'model="test/exact"\nsystems=["dgx-h200"]\n{field}={value}\n')
+    assert main([str(path)]) == 2
+
+
+def test_fixed_padding_is_charged_once_per_replica():
+    from kvfit.models import StorageCacheEstimate
+
+    cache = StorageCacheEstimate(
+        "test",
+        1,
+        (CacheComponent("kv", GIB, "fixture"),),
+        1,
+        8,
+        "test",
+        "fixture",
+        fixed_components=(CacheComponent("padding", GIB, "fixture"),),
+    )
+    layouts = plan_topologies(
+        cache,
+        weight_bytes=2 * GIB,
+        hardware=Hardware("test", "test", 8),
+        gpus=2,
+        utilization=1,
+        tensor_parallel=1,
+        runtime_reserve_bytes=GIB,
+    )
+    assert layouts[0].sequences_per_replica == 4  # 8 - 2 weight - 1 fixed - 1 reserve
+    assert layouts[0].total_sequences == 8

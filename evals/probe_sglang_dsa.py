@@ -71,7 +71,9 @@ def main():
                     {"url": BASE + p, "sha256": hashlib.sha256(b).hexdigest()}
                     for p, b in sources.items()
                 ],
-                "evidence": "isolated execution of pinned upstream shape functions; no GPU allocation",
+                "evidence": (
+                    "isolated execution of pinned upstream shape functions; no GPU allocation"
+                ),
                 "mla_bytes_per_layer_token": cells,
                 "index_shape_one_page": shapes["_buffer_shape"](obj, 1),
                 "index_pages_full_shared": [

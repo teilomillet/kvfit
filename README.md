@@ -30,6 +30,13 @@ that keeps static estimates separate from measured runtime evidence.
 
 ## Install
 
+Add it to a uv project (Python 3.11+):
+
+```bash
+uv add kvfit
+uv run kvfit --version
+```
+
 Run it without modifying a project:
 
 ```bash
@@ -68,6 +75,57 @@ The report gives you:
 `kvfit` fails closed on cache architectures it does not understand. It does not
 silently apply the standard Transformer KV formula to a new hybrid, recurrent,
 compressed, or sparse-attention model.
+
+### Two commands: find a minimum, inspect a machine
+
+Available since **0.2.5**. In a uv project, no repository checkout or demo script
+is needed. First, search the smallest whole-system count **per selected family**
+for a model and concurrent-user target:
+
+```bash
+uv run kvfit zai-org/GLM-5.3 \
+  --systems dgx-h200 dgx-b200 dgx-b300 --max-nodes 8 \
+  --concurrent-users 25 --active-sequences-per-user 1 \
+  --context 128k --kv-dtype fp8 \
+  --cache-layout sglang-dsa-scaled --mtp \
+  --runtime-reserve-gib 8 --utilization 0.8
+```
+
+Then inspect a fixed machine and its capacity:
+
+```bash
+uv run kvfit zai-org/GLM-5.3 \
+  --system dgx-b300 --nodes 1 --tp auto \
+  --context 128k --kv-dtype fp8 \
+  --cache-layout sglang-dsa-scaled --mtp \
+  --runtime-reserve-gib 8 --utilization 0.8
+```
+
+These commands read public metadata, not model weights. A count of 25 means
+25 simultaneous users, not 100 registered users. Two resident agent branches per
+user require `--active-sequences-per-user 2`. `128k` means 131,072 tokens per
+resident sequence, including retained input and generated output.
+
+Search resolves the checkpoint once and checks integer system counts from one
+through `--max-nodes`. It selects TP within a declared scale-up domain and full
+DP replicas across systems. It does not search cross-domain TP, partial servers,
+offload, prices, or latency. Add `--json` for components, provenance, all attempted
+layouts and minimum candidates. Exit 0 means at least one candidate; 1 means
+none in scope; 2 means invalid input or unsupported semantics.
+
+The GLM example opts into a **pinned SGLang storage hypothesis**, including
+scales, page rounding, pool padding and optional MTP cache. It does not configure
+SGLang or establish that the selected backend runs on each GPU. The 8 GiB
+reserve is an illustrative allowance per GPU, subtracted *inside* the 80% budget,
+not a measured requirement. Preset memory is nominal; replace it with target-host
+GiB using `--device-memory-gib` (one family per search when overriding).
+
+For another supported model, change its Hugging Face ID and **remove
+`--cache-layout ... --mtp`** unless a storage profile explicitly supports it.
+The default remains an architecture-specific logical payload estimate.
+Unsupported architectures or physical layouts fail instead of guessing.
+See [capacity search and verification](docs/capacity-search.md) for the arithmetic,
+source evidence, limits, and target-host validation path.
 
 ### For research agents and automation
 

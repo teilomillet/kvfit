@@ -58,3 +58,16 @@ a finite explicit per-device GiB value, and permit an explicit runtime reserve.
 - SLO qualification requires a configured threshold and a valid tail metric.
 - Distribution evidence requires testing the built wheel via `uv add` in a clean
   project, then checking the actual PyPI release. GitHub-only != PyPI publication.
+
+## Additional counterexamples and closure
+
+Follow-up tests reproduced calibration accepting missing/short output-token
+counts, non-standard JSON `Infinity` for unsupported TP, planning-only flags
+silently ignored during an engine-only probe, and a generic launch that did not
+select the requested storage backend. Each now has an explicit checked boundary.
+Ordinary CacheEstimate's existing object/serialization contract is preserved:
+physical pool padding is carried by a dedicated subtype.
+
+Full offline suite after these changes: 354 tests passed locally on Python 3.14;
+Ruff passed. These tests support the stated contracts and source-level arithmetic,
+not runtime memory or an assurance that future model formats cannot introduce bugs.

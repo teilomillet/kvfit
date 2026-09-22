@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import sys
 import tomllib
@@ -69,6 +70,8 @@ def _number(path: Path, field: str, value: Any, *, positive: bool = True) -> flo
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise _error(path, field, "must be a number")
     result = float(value)
+    if not math.isfinite(result):
+        raise _error(path, field, "must be finite")
     if positive and result <= 0:
         raise _error(path, field, "must be greater than 0")
     return result

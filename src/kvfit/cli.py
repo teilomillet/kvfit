@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from kvfit import __version__
 from kvfit.architectures import estimate_cache
+from kvfit.cache_layout import CACHE_LAYOUTS, apply_cache_layout
 from kvfit.engines import EngineCheck, EngineName, check_engines
 from kvfit.hardware import HARDWARE, parse_hardware
 from kvfit.hf import HuggingFaceError, fetch_model_metadata
 from kvfit.models import GIB, UnsupportedArchitecture
-from kvfit.planner import TopologyEstimate, plan_topologies, summarize_concurrency
+from kvfit.planner import TopologyEstimate, plan_topologies, search_systems, summarize_concurrency
 from kvfit.systems import SYSTEMS, System, parse_system
 from kvfit.toml_config import load_toml_defaults, parse_token_count, toml_path_from_argv
 
@@ -179,6 +182,44 @@ def _parser(defaults: Mapping[str, Any] | None = None) -> argparse.ArgumentParse
     parser.add_argument(
         "--config",
         help="TOML preset; command-line values override fields from the file",
+    )
+    parser.add_argument(
+        "--systems", nargs="+", help="search selected system families for a user target"
+    )
+    parser.add_argument(
+        "--max-nodes", type=int, default=8, help="search every node count from 1 to this limit"
+    )
+    parser.add_argument(
+        "--concurrent-users", type=int, help="simultaneously active users, not registered accounts"
+    )
+    parser.add_argument(
+        "--device-memory-gib",
+        type=float,
+        help="override per-device total memory in GiB; use a target-host reading",
+    )
+    parser.add_argument(
+        "--runtime-reserve-gib",
+        type=float,
+        default=0,
+        help="additional per-GPU reserve within the utilization budget",
+    )
+    parser.add_argument(
+        "--cache-layout",
+        choices=CACHE_LAYOUTS,
+        default="logical",
+        help="opt-in pinned storage representation; default counts logical state",
+    )
+    parser.add_argument(
+        "--mtp",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="count declared GLM MTP pool in SGLang storage profile",
+    )
+    parser.add_argument(
+        "--indexer-all-layers",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="count non-elided SGLang index buffers, e.g. HiCache or disaggregation",
     )
     parser.add_argument("--hardware", help="hardware preset, alias, or custom:<GiB>")
     parser.add_argument(
@@ -482,7 +523,9 @@ def _human_output(
         )
     print(f"Context:      {cache.context_tokens:,} tokens")
     print(f"KV dtype:     {kv_dtype} ({kv_dtype_source}); index dtype: {index_dtype}")
-    print(f"KV/sequence:  {cache.total_gib:.2f} GiB logical state")
+    print(f"KV/sequence:  {cache.total_gib:.6f} GiB ({cache.confidence})")
+    for component in getattr(cache, "fixed_components", ()):
+        print(f"Fixed/pool:   {component.name}: {component.bytes / GIB:.6f} GiB")
     for component in cache.components:
         print(f"  {component.name:<24} {component.bytes / GIB:>8.3f} GiB")
     print(f"Weights:      {weight_bytes / GIB:.2f} GiB ({weight_source})")
@@ -523,6 +566,13 @@ def _human_output(
             f"{best_any['concurrent_users']} users, TP={layout['tensor_parallel']} across "
             f"{layout['tensor_parallel_domains']} scale-up domains (not runtime-qualified)"
         )
+    if "requested_users" in concurrency:
+        print(
+            f"Requested concurrent users: {concurrency['requested_users']}; "
+            f"memory target met: {concurrency['meets_target']}"
+        )
+    if layouts and layouts[0].runtime_reserve_per_rank_bytes:
+        print(f"Runtime reserve/rank: {layouts[0].runtime_reserve_per_rank_bytes / GIB:.3f} GiB")
     _print_engine_checks(engine_checks)
     print("\nAssumptions:")
     print("  - Weight shards are ideally balanced across TP ranks.")
@@ -544,6 +594,47 @@ def _human_output(
         print(f"Speculative reference: {speculative.reference}")
 
 
+def _human_search(payload):
+    search = payload["search"]
+    print(f"Model: {payload['model']['repo_id']}@{payload['model']['resolved_revision']}")
+    print(
+        f"Target: {search['concurrent_users']} concurrent users, "
+        f"{search['resident_sequences']} resident sequences"
+    )
+    print(
+        f"Context: {payload['cache']['context_tokens']:,}; cache layout: {payload['cache_layout']}"
+    )
+    print(f"Weights: {payload['weights']['gib']:.3f} GiB ({payload['weights']['source']})")
+    print(f"State/sequence: {payload['cache']['gib_per_sequence']:.6f} GiB before TP placement")
+    for component in payload["cache"]["components"] + payload["cache"].get("fixed_components", []):
+        print(f"  {component['name']}: {component['gib']:.6f} GiB; {component['detail']}")
+    print("Minimum candidates per selected family, whole systems, scale-up-local TP only:")
+    for row in search["minimums"]:
+        capacity = row["capacity"]
+        layout = capacity["layout"]
+        print(
+            f"  {row['nodes']} x {row['system']['id']} ({row['gpus']} GPUs): "
+            f"TP={layout['tensor_parallel']} DP={layout['data_parallel']}; "
+            f"counted ceiling {capacity['concurrent_users']} concurrent users"
+        )
+        print(
+            f"    Per rank: weights={layout['weights_per_rank_gib']:.3f} GiB, "
+            f"state/sequence={layout['kv_per_sequence_per_rank_gib']:.6f} GiB, "
+            f"fixed={layout['fixed_cache_per_rank_gib']:.6f} GiB, "
+            f"reserve={layout['runtime_reserve_per_rank_gib']:.3f} GiB, "
+            f"budget={layout['budget_per_rank_gib']:.3f} GiB"
+        )
+    for name in search["not_found"]:
+        print(f"  {name}: no candidate in 1..{search['max_nodes']} systems in this search scope")
+    print(
+        "Memory-only candidates. Runtime allocations, engine support, "
+        "quality and latency require measurement."
+    )
+    for note in payload["warnings"] + payload["cache"]["notes"]:
+        print(f"  - {note}")
+    print(f"Storage/formula reference: {payload['cache']['reference']}")
+
+
 def run(args: argparse.Namespace) -> int:
     if args.list_hardware:
         _list_hardware(as_json=args.json)
@@ -554,7 +645,42 @@ def run(args: argparse.Namespace) -> int:
     if not args.model:
         raise ValueError("MODEL is required unless a --list-* option is used")
     selected_engines = _selected_engines(args.check_engine)
-    if not args.hardware and not args.system and not selected_engines:
+    if not (args.hardware or args.system or args.systems) and (
+        args.cache_layout != "logical"
+        or args.mtp
+        or args.indexer_all_layers
+        or args.concurrent_users is not None
+        or args.device_memory_gib is not None
+        or args.runtime_reserve_gib != 0
+    ):
+        raise ValueError("memory planning options require --hardware, --system or --systems")
+    if args.systems:
+        if (
+            args.hardware
+            or args.system
+            or args.gpus is not None
+            or args.nodes != 1
+            or args.tp is not None
+            or selected_engines
+        ):
+            raise ValueError(
+                "--systems search cannot be combined with a fixed topology or engine probe"
+            )
+        if args.concurrent_users is None or args.max_nodes < 1:
+            raise ValueError("--systems requires --concurrent-users and a positive --max-nodes")
+        if args.device_memory_gib is not None and len(set(args.systems)) != 1:
+            raise ValueError(
+                "--device-memory-gib search override requires exactly one system family"
+            )
+    if args.concurrent_users is not None and args.concurrent_users < 1:
+        raise ValueError("--concurrent-users must be positive")
+    if not math.isfinite(args.runtime_reserve_gib) or args.runtime_reserve_gib < 0:
+        raise ValueError("--runtime-reserve-gib must be finite and non-negative")
+    if args.device_memory_gib is not None and (
+        not math.isfinite(args.device_memory_gib) or args.device_memory_gib <= 0
+    ):
+        raise ValueError("--device-memory-gib must be finite and positive")
+    if not args.hardware and not args.system and not args.systems and not selected_engines:
         raise ValueError("--hardware, --system, or --check-engine is required")
     if args.require_engine_pass and not selected_engines:
         raise ValueError("--require-engine-pass requires --check-engine")
@@ -572,20 +698,36 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("--nodes requires --system")
     if not 0 < args.utilization <= 1:
         raise ValueError("--utilization must be greater than 0 and at most 1")
-    if args.weight_gib is not None and args.weight_gib <= 0:
-        raise ValueError("--weight-gib must be positive")
+    if args.weight_gib is not None and (not math.isfinite(args.weight_gib) or args.weight_gib <= 0):
+        raise ValueError("--weight-gib must be finite and positive")
     if args.engine_timeout <= 0:
         raise ValueError("--engine-timeout must be positive")
     if args.engine_tp is not None and args.engine_tp < 1:
         raise ValueError("--engine-tp must be positive")
 
+    def target_hardware(name):
+        value = parse_hardware(name)
+        if args.device_memory_gib is not None:
+            value = replace(
+                value, memory_gib=args.device_memory_gib, memory_basis="user-supplied-gib"
+            )
+        return value
+
+    search_targets = []
+    for name in dict.fromkeys(args.systems or []):
+        target = parse_system(name)
+        search_targets.append((target, target_hardware(target.hardware_id)))
     system = parse_system(args.system) if args.system else None
     if system:
-        hardware = parse_hardware(system.hardware_id)
+        hardware = target_hardware(system.hardware_id)
         gpus = system.accelerators_per_system * args.nodes
         scale_up_domain_accelerators = system.scale_up_domain_accelerators
     else:
-        hardware = parse_hardware(args.hardware) if args.hardware else None
+        hardware = (
+            target_hardware(args.hardware)
+            if args.hardware
+            else (search_targets[0][1] if search_targets else None)
+        )
         gpus = args.gpus or 1
         scale_up_domain_accelerators = None
 
@@ -613,7 +755,7 @@ def run(args: argparse.Namespace) -> int:
         metadata.quantization_config,
     )
     warnings.extend(dtype_warnings)
-    index_dtype = args.index_dtype or kv_dtype
+    index_dtype = args.index_dtype or ("fp8" if args.cache_layout != "logical" else kv_dtype)
     engine_checks = check_engines(
         selected_engines,
         metadata,
@@ -676,6 +818,25 @@ def run(args: argparse.Namespace) -> int:
         index_bytes=DTYPE_BYTES[index_dtype],
     )
 
+    cache = apply_cache_layout(
+        cache,
+        metadata.config,
+        profile=args.cache_layout,
+        kv_dtype=kv_dtype,
+        index_dtype=args.index_dtype,
+        mtp=args.mtp,
+        indexer_all_layers=args.indexer_all_layers,
+    )
+    if hardware.memory_basis == "nominal-assumed-gib":
+        warnings.append(
+            "hardware capacity is a nominal GiB assumption, not measured allocatable memory; "
+            "use --device-memory-gib to supply a target-host total"
+        )
+    if args.runtime_reserve_gib == 0:
+        warnings.append(
+            "no explicit runtime reserve was supplied; "
+            "unmodeled execution memory can lower capacity"
+        )
     if DTYPE_BYTES[kv_dtype] < 1 or DTYPE_BYTES[index_dtype] < 1:
         warnings.append(
             "4-bit cache values are packed-payload ideals; runtime scales, alignment, and "
@@ -712,6 +873,37 @@ def run(args: argparse.Namespace) -> int:
             "runtime-specific footprint"
         )
 
+    if search_targets:
+        search = search_systems(
+            cache,
+            weight_bytes=weight_bytes,
+            targets=search_targets,
+            max_nodes=args.max_nodes,
+            concurrent_users=args.concurrent_users,
+            active_sequences_per_user=args.active_sequences_per_user,
+            utilization=args.utilization,
+            runtime_reserve_bytes=args.runtime_reserve_gib * GIB,
+        )
+        payload = {
+            "model": metadata.as_dict(),
+            "cache": cache.as_dict(),
+            "precision": {
+                "kv_dtype": kv_dtype,
+                "index_dtype": index_dtype,
+                "kv_dtype_source": kv_dtype_source,
+            },
+            "weights": {"bytes": weight_bytes, "gib": weight_bytes / GIB, "source": weight_source},
+            "cache_layout": args.cache_layout,
+            "runtime_reserve_per_rank_gib": args.runtime_reserve_gib,
+            "search": search,
+            "warnings": warnings,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _human_search(payload)
+        return 0 if search["minimums"] else 1
+
     layouts = plan_topologies(
         cache,
         weight_bytes=weight_bytes,
@@ -720,13 +912,21 @@ def run(args: argparse.Namespace) -> int:
         utilization=args.utilization,
         tensor_parallel=args.tp,
         scale_up_domain_accelerators=scale_up_domain_accelerators,
+        runtime_reserve_bytes=args.runtime_reserve_gib * GIB,
     )
     concurrency = summarize_concurrency(
         layouts,
         active_sequences_per_user=args.active_sequences_per_user,
     )
+    if args.concurrent_users is not None:
+        recommended = concurrency["recommended"]
+        concurrency["requested_users"] = args.concurrent_users
+        concurrency["meets_target"] = (
+            recommended is not None and recommended["concurrent_users"] >= args.concurrent_users
+        )
     if args.json:
         payload = {
+            "cache_layout": args.cache_layout,
             "input_config": args.config,
             "model": metadata.as_dict(),
             "cache": cache.as_dict(),
@@ -782,6 +982,8 @@ def run(args: argparse.Namespace) -> int:
             engine_checks=engine_checks,
             concurrency=concurrency,
         )
+    if args.concurrent_users is not None and not concurrency["meets_target"] and engine_exit == 0:
+        return 1
     return engine_exit
 
 

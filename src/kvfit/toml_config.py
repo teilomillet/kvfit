@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import tomllib
@@ -9,6 +10,14 @@ from pathlib import Path
 from typing import Any
 
 ROOT_KEYS = {
+    "systems",
+    "max_nodes",
+    "concurrent_users",
+    "device_memory_gib",
+    "runtime_reserve_gib",
+    "cache_layout",
+    "mtp",
+    "indexer_all_layers",
     "model",
     "revision",
     "context",
@@ -121,6 +130,8 @@ def _int(path: Path, field: str, value: Any, *, minimum: int = 1) -> int:
 def _float(path: Path, field: str, value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise _error(path, field, "must be a number")
+    if not math.isfinite(value):
+        raise _error(path, field, "must be finite")
     return float(value)
 
 
@@ -210,6 +221,33 @@ def load_toml_defaults(value: str | Path) -> tuple[Path, dict[str, Any]]:
         raise _error(path, "nodes", "requires system")
 
     defaults: dict[str, Any] = {}
+    if "systems" in data:
+        values = data["systems"]
+        if not isinstance(values, list) or not values:
+            raise _error(path, "systems", "must be a non-empty array")
+        defaults["systems"] = [_string(path, "systems", value) for value in values]
+    for field in ("max_nodes", "concurrent_users"):
+        if field in data:
+            defaults[field] = _int(path, field, data[field])
+    if "device_memory_gib" in data:
+        defaults["device_memory_gib"] = _positive_float(
+            path, "device_memory_gib", data["device_memory_gib"]
+        )
+    if "runtime_reserve_gib" in data:
+        value = _float(path, "runtime_reserve_gib", data["runtime_reserve_gib"])
+        if value < 0:
+            raise _error(path, "runtime_reserve_gib", "must be non-negative")
+        defaults["runtime_reserve_gib"] = value
+    for field in ("mtp", "indexer_all_layers"):
+        if field in data:
+            defaults[field] = _bool(path, field, data[field])
+    if "cache_layout" in data:
+        from kvfit.cache_layout import CACHE_LAYOUTS
+
+        value = _string(path, "cache_layout", data["cache_layout"])
+        if value not in CACHE_LAYOUTS:
+            raise _error(path, "cache_layout", "unknown storage profile")
+        defaults["cache_layout"] = value
     for field in ("model", "revision", "hardware", "system"):
         if field in data:
             defaults[field] = _string(path, field, data[field])

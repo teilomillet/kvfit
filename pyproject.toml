@@ -1,6 +1,6 @@
 [project]
 name = "kvfit"
-version = "0.2.4"
+version = "0.2.5"
 description = "Will a Hugging Face LLM fit your GPU or DGX? Plan weights, KV cache or recurrent state, context, TP/DP, and measured calibration"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,12 +16,14 @@ class Hardware:
     architecture: str | None = None
     memory_type: str | None = None
     source_url: str | None = None
+    memory_basis: str = "nominal-assumed-gib"
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "label": self.label,
             "memory_gib": self.memory_gib,
+            "memory_basis": self.memory_basis,
             "unified_memory": self.unified_memory,
             "vendor": self.vendor,
             "architecture": self.architecture,
@@ -200,12 +203,13 @@ def parse_hardware(value: str) -> Hardware:
             memory_gib = float(raw_memory)
         except ValueError as error:
             raise ValueError("custom hardware must look like custom:80") from error
-        if memory_gib <= 0:
-            raise ValueError("custom hardware memory must be positive")
+        if not math.isfinite(memory_gib) or memory_gib <= 0:
+            raise ValueError("custom hardware memory must be finite and positive")
         return Hardware(
             id=f"custom:{memory_gib:g}",
             label=f"Custom {memory_gib:g} GiB accelerator",
             memory_gib=memory_gib,
+            memory_basis="user-supplied-gib",
         )
     choices = ", ".join(sorted(HARDWARE))
     raise ValueError(f"unknown hardware {value!r}; choose {choices}, or custom:<GiB>")
