@@ -1,6 +1,6 @@
 [project]
 name = "kvfit"
-version = "0.2.3"
+version = "0.2.4"
 description = "Will a Hugging Face LLM fit your GPU or DGX? Plan weights, KV cache or recurrent state, context, TP/DP, and measured calibration"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -41,6 +41,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = []

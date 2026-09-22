@@ -63,7 +63,8 @@ def _standard_bytes(config: Mapping[str, Any], context: int, kv_bytes: float) ->
             schedule = ["sliding_attention"] * layers
     else:
         schedule = ["full_attention"] * layers
-    window = int(config.get("sliding_window", context))
+    raw_window = config.get("sliding_window")
+    window = context if raw_window is None else int(raw_window)
     token_layer_sum = sum(
         min(context, window) if "sliding" in kind else context for kind in schedule
     )
@@ -84,6 +85,43 @@ def _mla_bytes(
     if indexed:
         expected += layers * context * _number(config, "index_head_dim") * index_bytes
     return expected, "independent MLA latent/RoPE plus index-key sum"
+
+
+def _glm_bytes(
+    config: Mapping[str, Any], context: int, kv_bytes: float, index_bytes: float
+) -> tuple[float, str]:
+    # This is an arithmetic cross-check, not empirical validation. Pinned
+    # checkpoint tensor ownership in test_glm_evidence supplies the external
+    # anchor that a second copy of the same assumption cannot provide.
+    layers = _number(config, "num_hidden_layers")
+    schedule = config.get("indexer_types")
+    if schedule is None:
+        schedule = config.get("index_topk_pattern")
+        if isinstance(schedule, str):
+            schedule = [{"F": "full", "S": "shared"}[mode] for mode in schedule]
+    if schedule is not None:
+        if (
+            not isinstance(schedule, Sequence)
+            or isinstance(schedule, (str, bytes))
+            or len(schedule) != layers
+            or any(mode not in ("full", "shared") for mode in schedule)
+            or schedule[0] != "full"
+        ):
+            raise ValueError("oracle requires a valid full/shared GLM indexer schedule")
+        owners = [i for i, mode in enumerate(schedule) if mode == "full"]
+    else:
+        frequency = config.get("index_topk_freq")
+        offset = config.get("index_skip_topk_offset")
+        frequency = 1 if frequency is None else frequency
+        offset = 2 if offset is None else offset
+        if type(frequency) is not int or frequency < 1 or type(offset) is not int or offset < 0:
+            raise ValueError("oracle requires integer GLM frequency/offset")
+        # Build owner indices rather than sharing the production resolver.
+        owners = list(range(min(max(offset - 1, 0), layers)))
+        owners += [i for i in range(offset - 1, layers, frequency) if i >= 0]
+    expected, _ = _mla_bytes(config, context, kv_bytes, index_bytes, False)
+    expected += sum(context * _number(config, "index_head_dim") * index_bytes for _ in owners)
+    return expected, "GLM base-layer MLA plus declared indexer-owner sum (arithmetic cross-check)"
 
 
 def _deepseek_v4_bytes(
@@ -206,8 +244,10 @@ def check_cache_estimate(
         expected, formula = _standard_bytes(config, context, kv_bytes)
     elif architecture == "deepseek-mla":
         expected, formula = _mla_bytes(config, context, kv_bytes, index_bytes, False)
-    elif architecture in {"deepseek-v3.2-dsa", "glm-dsa-mla"}:
+    elif architecture == "deepseek-v3.2-dsa":
         expected, formula = _mla_bytes(config, context, kv_bytes, index_bytes, True)
+    elif architecture == "glm-dsa-mla":
+        expected, formula = _glm_bytes(config, context, kv_bytes, index_bytes)
     elif architecture == "deepseek-v4-compressed-hybrid":
         expected, formula = _deepseek_v4_bytes(config, context, kv_bytes, index_bytes)
     elif architecture == "qwen-gated-delta-hybrid":

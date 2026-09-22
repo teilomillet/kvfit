@@ -15,15 +15,21 @@ jobs:
   offline-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - name: Install locked environment
-        run: uv sync --locked
-      - name: Run offline measured-cache regression
-        run: uv run pytest tests/test_dgx_spark_evidence.py -q
+        run: uv sync --locked --python ${{ matrix.python-version }}
+      - name: Lint
+        run: uv run ruff check .
+      - name: Run all offline regressions and model evidence
+        run: uv run pytest
 
   live-pinned-audit:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

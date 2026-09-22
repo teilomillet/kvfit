@@ -211,6 +211,22 @@ def test_ambiguous_or_unmodeled_glm_state_fails_closed(overrides: dict) -> None:
         estimate_cache(_small_glm(**overrides), context_tokens=4096)
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "num_hidden_layers",
+        "num_attention_heads",
+        "kv_lora_rank",
+        "qk_rope_head_dim",
+        "index_head_dim",
+    ],
+)
+@pytest.mark.parametrize("value", [True, 8.5, "8"])
+def test_glm_dimensions_cannot_be_silently_coerced(field: str, value: object) -> None:
+    with pytest.raises(UnsupportedArchitecture):
+        estimate_cache(_small_glm(**{field: value}), context_tokens=4096)
+
+
 @pytest.mark.parametrize("layer_type", ["indexed_attention", "deepseek_sparse_attention"])
 def test_declared_dsa_layer_schedule_is_accepted(layer_type: str) -> None:
     result = estimate_cache(_small_glm(layer_types=[layer_type] * 8), context_tokens=4096)

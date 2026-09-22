@@ -39,6 +39,11 @@ GEMMA4_REFERENCE = (
 MINIMAX_M3_REFERENCE = (
     "https://github.com/vllm-project/vllm/blob/main/vllm/models/minimax_m3/nvidia/model.py"
 )
+GLM_DSA_REFERENCE = (
+    "https://github.com/huggingface/transformers/blob/"
+    "14793d45af28336310a0013a89f1488d8ba1cc51/"
+    "src/transformers/models/glm_moe_dsa/modular_glm_moe_dsa.py"
+)
 
 # These families use the conventional per-layer K/V state represented by the
 # Transformers config fields consumed below. New model types are deliberately
@@ -176,6 +181,12 @@ def _architecture_names(config: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(name) for name in value)
 
 
+def _architecture_alias(model_type: str, names: tuple[str, ...], allowed: set[str]) -> bool:
+    # An explicit new model type is evidence of unknown semantics, even if it
+    # reuses an older class name. Missing types may use exact checked aliases.
+    return model_type == "unknown" and bool(set(names) & allowed)
+
+
 def _head_dim(config: Mapping[str, Any], query_heads: int) -> int:
     explicit = config.get("head_dim")
     if isinstance(explicit, (int, float)) and not isinstance(explicit, bool) and explicit > 0:
@@ -197,6 +208,7 @@ def _estimate_deepseek_mla(
     kv_bytes: float,
     index_bytes: float,
     with_indexer: bool,
+    indexer_layers: int | None = None,
 ) -> CacheEstimate:
     layers = _int(config, "num_hidden_layers")
     query_heads = _int(config, "num_attention_heads")
@@ -218,13 +230,14 @@ def _estimate_deepseek_mla(
     notes: list[str] = []
     if with_indexer:
         index_dim = _int(config, "index_head_dim")
-        indexer_bytes = layers * context_tokens * index_dim * index_bytes
+        indexed_layers = layers if indexer_layers is None else indexer_layers
+        indexer_bytes = indexed_layers * context_tokens * index_dim * index_bytes
         components.append(
             CacheComponent(
                 name="lightning-indexer",
                 bytes=indexer_bytes,
                 detail=(
-                    f"{layers} layers × {context_tokens} tokens × "
+                    f"{indexed_layers} indexer layers × {context_tokens} tokens × "
                     f"{index_dim} index state × {index_bytes:g} bytes"
                 ),
             )
@@ -241,6 +254,138 @@ def _estimate_deepseek_mla(
         confidence=confidence,
         reference=VLLM_DEEPSEEK_V4_REFERENCE,
         notes=tuple(notes),
+    )
+
+
+def _glm_indexer_schedule(config: Mapping[str, Any]) -> tuple[list[str], str]:
+    """Resolve checked GLM schedules; reject contradictory declarations.
+
+    Transformers prefers explicit modes over a pattern over frequency/offset.
+    We additionally require simultaneously supplied declarations to agree: a
+    memory plan must not silently choose between different state descriptions.
+    """
+    layers = _int(config, "num_hidden_layers")
+    model_type = str(config.get("model_type", "glm_moe_dsa"))
+    declarations: list[tuple[str, list[str]]] = []
+    for field in ("indexer_types", "index_topk_pattern"):
+        raw = config.get(field)
+        if raw is None:
+            continue
+        if field == "index_topk_pattern" and isinstance(raw, str):
+            raw = [{"F": "full", "S": "shared"}.get(value, value) for value in raw]
+        if (
+            not isinstance(raw, Sequence)
+            or isinstance(raw, (str, bytes))
+            or len(raw) != layers
+            or any(not isinstance(value, str) or value not in {"full", "shared"} for value in raw)
+        ):
+            raise UnsupportedArchitecture(
+                model_type,
+                f"{field} must contain one full/shared mode per model layer",
+                relevant_fields=(field, "num_hidden_layers"),
+            )
+        declarations.append((field, list(raw)))
+
+    frequency_fields = ("index_topk_freq", "index_skip_topk_offset")
+    if not declarations or any(config.get(field) is not None for field in frequency_fields):
+        values = {
+            field: config.get(field) if config.get(field) is not None else default
+            for field, default in zip(frequency_fields, (1, 2), strict=True)
+        }
+        values["model_type"] = model_type
+        frequency = _strict_int(values, "index_topk_freq")
+        offset = _strict_int(values, "index_skip_topk_offset", minimum=0)
+        schedule = [
+            "full" if max(index - offset + 1, 0) % frequency == 0 else "shared"
+            for index in range(layers)
+        ]
+        source = (
+            "index_topk_freq/index_skip_topk_offset"
+            if any(config.get(field) is not None for field in frequency_fields)
+            else "documented GLM default (one indexer per layer)"
+        )
+        declarations.append((source, schedule))
+
+    source, schedule = declarations[0]
+    if schedule[0] != "full":
+        raise UnsupportedArchitecture(
+            model_type,
+            "a shared indexer layer requires a preceding full layer",
+            relevant_fields=(source,),
+        )
+    if any(other != schedule for _, other in declarations[1:]):
+        raise UnsupportedArchitecture(
+            model_type,
+            "conflicting indexer schedule declarations",
+            relevant_fields=tuple(field for field, _ in declarations),
+        )
+    return schedule, source
+
+
+def _estimate_glm_dsa(
+    config: Mapping[str, Any], *, context_tokens: int, kv_bytes: float, index_bytes: float
+) -> CacheEstimate:
+    for field in (
+        "num_hidden_layers",
+        "num_attention_heads",
+        "kv_lora_rank",
+        "qk_rope_head_dim",
+        "index_head_dim",
+    ):
+        _strict_int(config, field, minimum=0 if field == "qk_rope_head_dim" else 1)
+    names = _architecture_names(config)
+    if names and any(name.lower() != "glmmoedsaforcausallm" for name in names):
+        raise UnsupportedArchitecture(
+            str(config.get("model_type", "glm_moe_dsa")),
+            "GLM architecture class is not in the checked DSA set",
+            relevant_fields=("architectures",),
+        )
+    unmodeled = tuple(
+        field
+        for field in (
+            "linear_attn_config",
+            "linear_layer_indices",
+            "mamba_d_state",
+            "mamba_d_conv",
+            "ssm_cfg",
+            "attention_chunk_size",
+            "compress_ratios",
+            "sliding_window",
+            "index_kpool",
+            "index_kpool_compress",
+            "index_kpool_always_select_tail",
+        )
+        if config.get(field) is not None
+    )
+    if unmodeled:
+        raise UnsupportedArchitecture(
+            str(config.get("model_type", "glm_moe_dsa")),
+            "GLM cache state differs from the checked DSA adapter",
+            relevant_fields=unmodeled,
+        )
+    if config.get("layer_types") is not None:
+        _layer_schedule(config, allowed={"indexed_attention", "deepseek_sparse_attention"})
+    schedule, source = _glm_indexer_schedule(config)
+    indexed_layers = schedule.count("full")
+    estimate = _estimate_deepseek_mla(
+        config,
+        context_tokens=context_tokens,
+        kv_bytes=kv_bytes,
+        index_bytes=index_bytes,
+        with_indexer=True,
+        indexer_layers=indexed_layers,
+    )
+    return replace(
+        estimate,
+        architecture="glm-dsa-mla",
+        confidence="architecture-formula",
+        reference=GLM_DSA_REFERENCE,
+        notes=(
+            f"Indexer schedule from {source}: {indexed_layers} full, "
+            f"{len(schedule) - indexed_layers} shared; shared layers reuse top-k selections.",
+            "Counts base-model MLA and index keys only; MTP/draft cache, runtime scales, "
+            "alignment and workspaces are not modeled. Verify the target engine separately.",
+        ),
     )
 
 
@@ -1235,8 +1380,8 @@ def estimate_cache(
     if not architecture_names:
         architecture_names = tuple(name.lower() for name in _architecture_names(raw_config))
 
-    is_v32 = model_type in {"deepseek_v32", "deepseek_v3_2"} or any(
-        "deepseekv32" in name or "deepseekv3_2" in name for name in architecture_names
+    is_v32 = model_type in {"deepseek_v32", "deepseek_v3_2"} or _architecture_alias(
+        model_type, architecture_names, {"deepseekv32forcausallm", "deepseekv3_2forcausallm"}
     )
     if is_v32:
         return _estimate_deepseek_mla(
@@ -1247,7 +1392,9 @@ def estimate_cache(
             with_indexer=True,
         )
 
-    if model_type == "deepseek_v4" or any("deepseekv4" in name for name in architecture_names):
+    if model_type == "deepseek_v4" or _architecture_alias(
+        model_type, architecture_names, {"deepseekv4forcausallm"}
+    ):
         return _estimate_deepseek_v4(
             config,
             context_tokens=context_tokens,
@@ -1255,8 +1402,8 @@ def estimate_cache(
             index_bytes=index_bytes,
         )
 
-    is_deepseek_mla = model_type in {"deepseek_v2", "deepseek_v3"} or any(
-        name.startswith(("deepseekv2", "deepseekv3")) for name in architecture_names
+    is_deepseek_mla = model_type in {"deepseek_v2", "deepseek_v3"} or _architecture_alias(
+        model_type, architecture_names, {"deepseekv2forcausallm", "deepseekv3forcausallm"}
     )
     if is_deepseek_mla and config.get("kv_lora_rank") is not None:
         return _estimate_deepseek_mla(
@@ -1267,15 +1414,17 @@ def estimate_cache(
             with_indexer=False,
         )
 
-    if model_type == "gpt_oss" or any("gptoss" in name for name in architecture_names):
+    if model_type == "gpt_oss" or _architecture_alias(
+        model_type, architecture_names, {"gptossforcausallm"}
+    ):
         return _estimate_gpt_oss(
             config,
             context_tokens=context_tokens,
             kv_bytes=kv_bytes,
         )
 
-    is_inkling = model_type == "inkling_mm_model" or any(
-        "inkling" in name for name in architecture_names
+    is_inkling = model_type == "inkling_mm_model" or _architecture_alias(
+        model_type, architecture_names, {"inklingforconditionalgeneration"}
     )
     if is_inkling:
         return _estimate_inkling(
@@ -1288,7 +1437,17 @@ def estimate_cache(
         "qwen3_next",
         "qwen3_5_text",
         "qwen3_5_moe_text",
-    } or any("qwen3next" in name or "qwen3_5" in name for name in architecture_names)
+    } or _architecture_alias(
+        model_type,
+        architecture_names,
+        {
+            "qwen3nextforcausallm",
+            "qwen3_5forcausallm",
+            "qwen3_5moeforcausallm",
+            "qwen3_5forconditionalgeneration",
+            "qwen3_5moeforconditionalgeneration",
+        },
+    )
     if is_qwen_gdn:
         return _estimate_qwen_gdn(
             config,
@@ -1296,22 +1455,26 @@ def estimate_cache(
             kv_bytes=kv_bytes,
         )
 
-    if model_type == "nemotron_h" or any("nemotronh" in name for name in architecture_names):
+    if model_type == "nemotron_h" or _architecture_alias(
+        model_type, architecture_names, {"nemotronhforcausallm"}
+    ):
         return _estimate_nemotron_h(
             config,
             context_tokens=context_tokens,
             kv_bytes=kv_bytes,
         )
 
-    if model_type == "gemma4_text" or any("gemma4" in name for name in architecture_names):
+    if model_type == "gemma4_text" or _architecture_alias(
+        model_type, architecture_names, {"gemma4forcausallm", "gemma4forconditionalgeneration"}
+    ):
         return _estimate_gemma4(
             config,
             context_tokens=context_tokens,
             kv_bytes=kv_bytes,
         )
 
-    is_minimax_m3 = model_type in {"minimax_m3", "minimax_m3_sparse"} or any(
-        "minimaxm3" in name for name in architecture_names
+    is_minimax_m3 = model_type in {"minimax_m3", "minimax_m3_sparse"} or _architecture_alias(
+        model_type, architecture_names, {"minimaxm3forcausallm"}
     )
     if is_minimax_m3:
         return _estimate_minimax_m3(
@@ -1321,23 +1484,21 @@ def estimate_cache(
             index_bytes=index_bytes,
         )
 
-    if model_type == "glm_moe_dsa" or any("glmmoedsa" in name for name in architecture_names):
-        estimate = _estimate_deepseek_mla(
+    if model_type == "glm_moe_dsa" or _architecture_alias(
+        model_type, architecture_names, {"glmmoedsaforcausallm"}
+    ):
+        auto_map = config.get("auto_map", raw_config.get("auto_map"))
+        if isinstance(auto_map, Mapping) and auto_map.get("AutoModelForCausalLM") is not None:
+            raise UnsupportedArchitecture(
+                model_type,
+                "custom remote model code can change GLM cache semantics",
+                relevant_fields=("auto_map",),
+            )
+        return _estimate_glm_dsa(
             config,
             context_tokens=context_tokens,
             kv_bytes=kv_bytes,
             index_bytes=index_bytes,
-            with_indexer=True,
-        )
-        return replace(
-            estimate,
-            architecture="glm-dsa-mla",
-            confidence="architecture-formula",
-            notes=(
-                *estimate.notes,
-                "GLM's DSA config exposes the same latent-KV, RoPE, and index-key widths; "
-                "a live engine load remains the stronger verification level.",
-            ),
         )
 
     unsupported_markers = tuple(

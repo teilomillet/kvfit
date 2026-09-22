@@ -138,7 +138,9 @@ def test_dgx_spark_accuracy_and_blind_discovery_contract_are_retrievable() -> No
     assert 'revision = "1c3f884bc99aac2524f6d49bcbac8c88401afd66"' in audit
     assert 'preset = "dgx-spark"' in audit
     assert "uv sync --locked" in workflow
-    assert "tests/test_dgx_spark_evidence.py" in workflow
+    # The complete suite includes the Spark evidence and the other adapters;
+    # running only the historical two-test file no longer meets the contract.
+    assert "run: uv run pytest\n" in workflow
     assert "kvfit-audit examples/dgx-spark-evidence.toml" in workflow
     assert "schedule:" in workflow
     assert discovery["prohibited_query_terms"] == ["kvfit", "teilomillet"]

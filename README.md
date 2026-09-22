@@ -485,7 +485,11 @@ uv run kvfit \
   KV, Mamba convolution history, and FP32 temporal state.
 - Gemma 4: distinct global/local KV head counts and head dimensions, sliding
   windows, and cross-layer KV sharing when declared.
-- GLM DSA: latent MLA state plus its index-key cache.
+- GLM DSA: latent MLA state plus index keys only for layers owning an indexer.
+  Explicit `indexer_types`, `index_topk_pattern`, and frequency/offset schedules
+  are validated. Shared layers reuse top-k selections; they keep their own MLA
+  cache. Conflicting declarations and unmodeled hybrid/compressed state are
+  rejected. GLM-5.3-Flash is a different, currently unsupported architecture.
 - MiniMax M3: full GQA history plus the sparse-attention index-key side cache;
   sparse selection does not imply KV eviction.
 - Replicated tensor-parallel groups on identical accelerators.
@@ -496,6 +500,21 @@ rejected until its exact state shapes and schedule are checked.
 Unknown model types and configs that require custom remote model code are also
 rejected by default. This is intentional: a new architecture can expose familiar
 field names while storing very different inference state.
+
+An explicitly unknown model type cannot inherit support from an older class
+name. Architecture-name fallback, when the type is absent, uses exact checked
+aliases rather than substring matching.
+
+### Model regression evidence
+
+The [GLM indexer evaluation contract](https://github.com/teilomillet/kvfit/blob/main/evals/glm-indexer-contract.md)
+records pinned configurations, independent checkpoint tensor ownership, boundary
+cases, and known limits. GLM-5.1, 5.2 and 5.3, DeepSeek V3.2/V4, Qwen3/Qwen3.6
+and rejection of GLM-5.3-Flash are exercised offline. These are configuration
+and arithmetic checks, not target-GPU measurements. The separate formula oracle
+can share a mistaken assumption with production code; agreement alone is not
+empirical validation. Run the full suite with `uv run pytest`; CI runs it and
+Ruff on Python 3.11–3.14 for pushes to main and pull requests.
 
 ## What the number means
 

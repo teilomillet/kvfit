@@ -11,3 +11,11 @@ Preserve kvfit's evidence boundary in code and documentation:
   serving topology actually shards across them.
 - Label static fit as memory-only; require target-host measurement for runtime,
   latency, throughput, or SLO claims.
+
+Before changing or adding a cache adapter, write the evaluation first. Pin a
+real configuration and a primary source for its state semantics; where available,
+cross-check tensor ownership or target-engine measurements independently of the
+formula. Exercise changed schedules, context and dtype boundaries, unsupported
+state, and neighboring model families. A second arithmetic implementation is not
+independent empirical evidence. Preserve explicit rejection when semantics are
+unknown, and run the complete offline suite and Ruff before publishing.

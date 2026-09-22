@@ -35,7 +35,7 @@ grounded in Transformers revision `14793d45af28336310a0013a89f1488d8ba1cc51`:
 | Context and precision | Boundary lengths and independently varied MLA/index widths affect only the corresponding state. Sub-byte cases test arithmetic, not kernel support. |
 | Schedule representation | Explicit modes, string/list patterns and frequency/offset rules agree when equivalent. |
 | Uncertainty | Invalid lengths/types, orphan shared layers, contradictory declarations and unmodeled state must raise `UnsupportedArchitecture`, not return a plausible fit. |
-| Model identity | A new GLM type or changed class name must not inherit support by substring. |
+| Model identity | New types in the GLM, DeepSeek and Qwen cases must not inherit support from older class names; fallback aliases must match exactly. |
 | TP/DP | MLA cache remains replicated under the planner's TP assumption; weights and replicas follow their own rules. Custom memory isolates this check from GPU specifications. |
 | Public entry points | CLI JSON and audit report use the corrected payload and preserve memory-only qualification. |
 | Oracle independence | Feeding the original incorrect 78-indexer estimate must fail, even when its arithmetic is internally consistent. |
@@ -46,3 +46,22 @@ New architecture support requires a pinned configuration, a source describing it
 state, a positive case, an adversarial/changed-state case, and a regression for
 existing families. Target-host measurement remains necessary for actual memory,
 throughput, latency and serving capacity. GPU specifications are outside this fix.
+
+## Verification record
+
+Before production changes, the 119-case evaluation produced 106 failures and
+13 passes; the pre-existing 150-test suite passed. The failures exposed the GLM
+overcount, ignored/invalid schedules, unknown architecture aliases, and a separate
+oracle crash on Qwen3-32B's published `sliding_window: null`.
+
+A second dimension-validation evaluation was also run before its guard was
+changed: five fractional-dimension cases failed and ten bool/string cases were
+already rejected. This records detection, not 111 independent product defects:
+many cases deliberately exercise the same defect across orthogonal inputs.
+
+After the changes: 284 offline tests pass on Python 3.14, including all 134 new
+model-evidence cases; Ruff passes. The 0.2.4 wheel was built through its source
+distribution, installed in a separate environment, and exercised on GLM-5.1,
+GLM-5.3 and explicit Flash rejection. A live metadata-only CLI request at the
+pinned GLM-5.3 revision reports 43.875 GiB MLA plus 2.625 GiB index keys and
+retains `memory-only` qualification. No weights, engine or GPU were loaded.
